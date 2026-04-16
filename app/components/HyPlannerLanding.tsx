@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import { WORKFLOW_STEPS } from "@/lib/hyplanner-workflow";
 import { WorkflowStepIcon } from "./WorkflowStepIcon";
 import { ProjectLoadPanel } from "./ProjectLoadPanel";
@@ -19,9 +20,17 @@ export function HyPlannerLanding() {
         <div className="mx-auto flex h-14 max-w-7xl items-center justify-between gap-4 px-4 sm:h-[3.25rem] sm:px-6 lg:px-8">
           <Link
             href="/"
-            className="text-[15px] font-semibold tracking-tight text-zinc-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-600"
+            className="flex items-center gap-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-600"
           >
-            HyPlanner
+            <Image
+              src="/branding/hyplanner-logo.png"
+              alt="HyPlanner 1.0"
+              width={220}
+              height={44}
+              priority
+              className="h-8 w-auto sm:h-9"
+            />
+            <span className="sr-only">HyPlanner</span>
           </Link>
           <nav aria-label="Primary" className="flex items-center gap-2 sm:gap-3">
             <a
@@ -36,46 +45,99 @@ export function HyPlannerLanding() {
 
       <main id="main-content" className="flex-1">
         <div className="border-b border-zinc-200/80 bg-gradient-to-b from-white to-zinc-50/80">
-          <div className="mx-auto max-w-7xl px-4 py-14 sm:px-6 sm:py-20 lg:px-8">
-            <header className="mx-auto max-w-3xl text-center lg:mx-0 lg:max-w-2xl lg:text-left">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">HyPlanner · Release 1.0</p>
-              <h1 className="mt-4 text-3xl font-semibold tracking-tight text-zinc-900 sm:text-4xl lg:text-[2.5rem] lg:leading-tight">
-                Hydrogen valley planning, structured as software
-              </h1>
-              <p className="mt-5 text-base leading-relaxed text-zinc-600 sm:text-lg">
-                A fixed seven-stage sequence—from location and signals through demand, gates, capability, expert review,
-                and programme feedback—so decisions stay traceable across teams and funding rounds.
-              </p>
-              <div className="mt-10 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-center lg:justify-start">
-                <Link
-                  href="/planner?new=1"
-                  className="inline-flex min-h-11 items-center justify-center rounded-lg border border-orange-300 bg-white px-6 py-3 text-sm font-semibold text-orange-700 shadow-sm transition-colors hover:border-orange-400 hover:bg-orange-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-600"
-                >
-                  Start new project
-                </Link>
-                <a
-                  href="#workflow"
-                  className="inline-flex min-h-11 items-center justify-center rounded-lg border border-zinc-300 bg-white px-6 py-3 text-sm font-medium text-zinc-800 shadow-sm transition-colors hover:border-zinc-400 hover:bg-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-400"
-                >
-                  View workflow
-                </a>
-              </div>
-
-              <div className="mt-6 max-w-xl">
-                <details className="rounded-xl border border-zinc-200 bg-white/60 p-3 shadow-sm">
-                  <summary className="cursor-pointer list-none rounded-lg px-2 py-2 text-sm font-semibold text-zinc-900 hover:bg-zinc-50">
-                    Load saved project
-                  </summary>
-                  <div className="mt-3">
-                    <ProjectLoadPanel />
+          <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-12 lg:px-8">
+            <div className="grid gap-8 lg:grid-cols-12 lg:items-start">
+              <header className="lg:col-span-7">
+                <div className="flex items-center gap-4">
+                  <div className="rounded-2xl border border-zinc-200 bg-white p-2 shadow-sm">
+                    <Image
+                      src="/branding/hyplanner-logo.png"
+                      alt="HyPlanner 1.0"
+                      width={360}
+                      height={72}
+                      priority
+                      className="h-12 w-auto sm:h-14"
+                    />
                   </div>
-                </details>
-              </div>
-            </header>
+                  <p className="hidden text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500 sm:block">
+                    Release 1.0
+                  </p>
+                </div>
+
+                <h1 className="mt-6 text-3xl font-semibold tracking-tight text-zinc-900 sm:text-4xl lg:text-[2.6rem] lg:leading-tight">
+                  Hydrogen valley planning, structured as software
+                </h1>
+                <p className="mt-4 max-w-2xl text-base leading-relaxed text-zinc-600 sm:text-lg">
+                  A fixed sequence—from problem definition through location, stakeholders, demand, gates, capability,
+                  expert review, and feedback—so teams stay aligned and decisions remain traceable.
+                </p>
+
+                <div className="mt-7 grid gap-3 sm:grid-cols-3">
+                  {[
+                    { k: "01", t: "One workflow", d: "Same steps for every project; no guesswork." },
+                    { k: "02", t: "Decision log", d: "Keep assumptions and changes auditable." },
+                    { k: "03", t: "Versioned saves", d: "Snapshot milestones locally as you iterate." },
+                  ].map((x) => (
+                    <div
+                      key={x.k}
+                      className="rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm ring-1 ring-zinc-950/[0.03]"
+                    >
+                      <p className="font-mono text-[10px] font-semibold uppercase tracking-wider text-zinc-500">{x.k}</p>
+                      <p className="mt-1 text-sm font-semibold text-zinc-900">{x.t}</p>
+                      <p className="mt-1 text-xs leading-relaxed text-zinc-600">{x.d}</p>
+                    </div>
+                  ))}
+                </div>
+              </header>
+
+              <aside className="lg:col-span-5">
+                <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm ring-1 ring-zinc-950/[0.04]">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Project actions</p>
+                  <p className="mt-2 text-sm text-zinc-600">
+                    Start a new plan or load a versioned snapshot. Your drafts stay local in this browser.
+                  </p>
+
+                  <div className="mt-4 grid gap-3">
+                    <Link
+                      href="/planner?new=1"
+                      className="inline-flex min-h-11 items-center justify-center rounded-lg border border-orange-300 bg-orange-50 px-6 py-3 text-sm font-semibold text-orange-800 shadow-sm transition-colors hover:border-orange-400 hover:bg-orange-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-600"
+                    >
+                      Start new project
+                    </Link>
+
+                    <details className="rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+                      <summary className="cursor-pointer list-none rounded-lg px-2 py-2 text-sm font-semibold text-zinc-900 hover:bg-white">
+                        Load saved project
+                      </summary>
+                      <div className="mt-3">
+                        <ProjectLoadPanel />
+                      </div>
+                    </details>
+                  </div>
+
+                  <div className="mt-5 rounded-xl border border-zinc-200 bg-white p-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">What you’ll produce</p>
+                    <ul className="mt-3 space-y-2 text-sm text-zinc-700">
+                      {[
+                        "Problem definition and constraints register",
+                        "Location signals + boundary notes (Opportunity Map)",
+                        "Stakeholder register and early demand estimate",
+                        "Gate decision rationale + next actions in the log",
+                      ].map((x) => (
+                        <li key={x} className="flex gap-2">
+                          <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-sky-700" aria-hidden />
+                          <span>{x}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </aside>
+            </div>
           </div>
         </div>
 
-        <div className="mx-auto max-w-7xl px-4 py-16 sm:px-6 sm:py-20 lg:px-8">
+        <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-12 lg:px-8">
           <section id="workflow" className="scroll-mt-24" aria-labelledby="workflow-heading">
             <div className="max-w-3xl">
               <h2 id="workflow-heading" className="text-xl font-semibold tracking-tight text-zinc-900 sm:text-2xl">

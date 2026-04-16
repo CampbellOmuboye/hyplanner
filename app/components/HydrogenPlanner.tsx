@@ -1,8 +1,7 @@
 "use client";
 
-/* eslint-disable react-hooks/set-state-in-effect */
-
 import Link from "next/link";
+import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { WORKFLOW_STEPS, WORKFLOW_STEP_COUNT } from "@/lib/hyplanner-workflow";
@@ -15,6 +14,12 @@ import {
   type ProjectVersionMeta,
 } from "@/lib/hyplanner-projects-storage";
 import { getRegionById } from "@/lib/opportunity-map/mockRegions";
+import {
+  derivePlanningProfile,
+  problemMaterialKey,
+  type ProblemConstraintKey as ProfileConstraintKey,
+  type ProblemConstraintStatus as ProfileConstraintStatus,
+} from "@/lib/planning-profile";
 import { WorkflowStepIcon } from "./WorkflowStepIcon";
 import { HydrogenOpportunityMap } from "./opportunity-map/HydrogenOpportunityMap";
 
@@ -265,6 +270,20 @@ export function HydrogenPlanner() {
   const last = WORKFLOW_STEP_COUNT - 1;
   const step = WORKFLOW_STEPS[currentStep];
   const { overall, perStep } = useMemo(() => computeProjectCompletion(state), [state]);
+  const planningProfile = useMemo(
+    () =>
+      derivePlanningProfile({
+        useCase: state.problem.useCase,
+        geographyScope: state.problem.geographyScope,
+        projectType: state.problem.projectType,
+        targetWindow: state.problem.targetWindow,
+        constraints: state.problem.constraints as unknown as Record<
+          ProfileConstraintKey,
+          { status: ProfileConstraintStatus; notes?: string }
+        >,
+      }),
+    [state.problem]
+  );
 
   useEffect(() => {
     if (startNewProject) {
@@ -322,6 +341,104 @@ export function HydrogenPlanner() {
     setProjectLastSavedAt(null);
     setHydrated(true);
   }, [startNewProject, projectIdFromUrl, versionIdFromUrl, last]);
+
+  const materialProblemRef = useRef<string | null>(null);
+  const materialProblemInitializedRef = useRef(false);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const key = problemMaterialKey({
+      useCase: state.problem.useCase,
+      geographyScope: state.problem.geographyScope,
+      projectType: state.problem.projectType,
+      targetWindow: state.problem.targetWindow,
+      constraints: state.problem.constraints as unknown as Record<
+        ProfileConstraintKey,
+        { status: ProfileConstraintStatus; notes?: string }
+      >,
+    });
+
+    if (!materialProblemInitializedRef.current) {
+      materialProblemInitializedRef.current = true;
+      materialProblemRef.current = key;
+      return;
+    }
+
+    const prevKey = materialProblemRef.current;
+    if (!prevKey || prevKey === key) return;
+
+    // Log Step 0 material changes for traceability (useCase / projectType / constraint status).
+    try {
+      const prev = JSON.parse(prevKey) as {
+        useCase: string;
+        projectType: string;
+        statuses: Record<string, string>;
+      };
+      const next = JSON.parse(key) as {
+        useCase: string;
+        projectType: string;
+        statuses: Record<string, string>;
+      };
+
+      const diffs: string[] = [];
+      if (prev.useCase !== next.useCase) diffs.push(`useCase: ${prev.useCase || "(unset)"} → ${next.useCase || "(unset)"}`);
+      if (prev.projectType !== next.projectType) diffs.push(`projectType: ${prev.projectType} → ${next.projectType}`);
+
+      const label: Record<ProblemConstraintKey, string> = {
+        gridCapacity: "grid capacity",
+        permitting: "permitting",
+        water: "water",
+        landZoning: "land/zoning",
+        community: "community",
+        capexFunding: "capex/funding",
+      };
+      (Object.keys(label) as ProblemConstraintKey[]).forEach((k) => {
+        const from = prev.statuses?.[k];
+        const to = next.statuses?.[k];
+        if (from && to && from !== to) diffs.push(`${label[k]}: ${from} → ${to}`);
+      });
+
+      if (diffs.length) {
+        const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `d-${Date.now()}`;
+        setDecisions((d) => [{ id, text: `[Change] Step 0 updated — ${diffs.join("; ")}`, at: new Date().toISOString() }, ...d]);
+      }
+    } catch {
+      // Ignore parse issues; key format is internal-only.
+    } finally {
+      materialProblemRef.current = key;
+    }
+  }, [hydrated, state.problem]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    // Step-entry soft defaults derived from Step 0.
+    if (currentStep === 1) {
+      setState((s) => {
+        const next = { ...s };
+        let changed = false;
+
+        if (!next.location.region.trim() && planningProfile.seedLocationRegion) {
+          next.location = { ...next.location, region: planningProfile.seedLocationRegion };
+          changed = true;
+        }
+
+        const anySignals = Object.values(next.location.signals).some(Boolean);
+        if (!anySignals) {
+          next.location = {
+            ...next.location,
+            signals: { ...next.location.signals, ...planningProfile.preferredSignals },
+          };
+          changed = true;
+        }
+
+        return changed ? next : s;
+      });
+    }
+
+    if (currentStep === 5 && !state.capacity.targetQuarter && planningProfile.seedCapacityTargetQuarter) {
+      setState((s) => ({ ...s, capacity: { ...s.capacity, targetQuarter: planningProfile.seedCapacityTargetQuarter ?? "" } }));
+    }
+  }, [hydrated, currentStep, planningProfile, state.capacity.targetQuarter]);
 
   useEffect(() => {
     if (!activeProjectId) {
@@ -523,6 +640,26 @@ export function HydrogenPlanner() {
     setDecisions((d) => [...newEntries, ...d]);
   };
 
+  const canContinueFromProblem =
+    state.problem.statement.trim().length >= 20 &&
+    Boolean(state.problem.useCase) &&
+    Boolean(state.problem.geographyScope.trim()) &&
+    state.problem.successCriteria.some((c) => c.trim().length > 0);
+
+  const handleFooterNext = () => {
+    if (currentStep === last) {
+      finish();
+      return;
+    }
+    if (currentStep === 0) {
+      if (!canContinueFromProblem) return;
+      generateInitialWorkplanFromConstraints();
+      goNext();
+      return;
+    }
+    goNext();
+  };
+
   const createProjectSnapshot = (): ProjectSnapshot => ({
     state,
     currentStep,
@@ -594,7 +731,19 @@ export function HydrogenPlanner() {
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 lg:flex-row lg:items-start">
       <div className="order-1 min-w-0 flex-1 rounded-xl border border-zinc-200 bg-white text-zinc-900 shadow-lg ring-1 ring-zinc-950/[0.04] lg:order-2">
       <header className="flex flex-wrap items-center justify-between gap-3 rounded-t-xl bg-[#1e3a8a] px-6 py-4 text-white md:py-5">
-        <h1 className="text-xl font-bold tracking-tight md:text-2xl">HyPlanner 1.0</h1>
+        <h1 className="flex items-center gap-3">
+          <span className="rounded-lg bg-white/95 p-1.5 shadow-sm ring-1 ring-white/30">
+            <Image
+              src="/branding/hyplanner-logo.png"
+              alt="HyPlanner 1.0"
+              width={170}
+              height={34}
+              priority
+              className="h-7 w-auto"
+            />
+          </span>
+          <span className="sr-only">HyPlanner 1.0</span>
+        </h1>
         <Link
           href={activeProjectId ? `/planner/gantt?projectId=${encodeURIComponent(activeProjectId)}${activeVersionId ? `&versionId=${encodeURIComponent(activeVersionId)}` : ""}` : "/planner/gantt"}
           className="shrink-0 rounded-lg border border-white/40 bg-white/10 px-3 py-2 text-sm font-semibold text-white backdrop-blur-sm transition-colors hover:bg-white/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
@@ -725,7 +874,7 @@ export function HydrogenPlanner() {
         </ol>
       </nav>
 
-      <div className="px-4 py-6 md:px-6 md:py-8">
+      <div className="px-4 py-5 md:px-6 md:py-6">
         <div className="flex flex-wrap items-baseline gap-2 gap-y-1">
           <span className="font-mono text-sm text-zinc-400">{step.displayId}</span>
           <h2 className="text-xl font-bold text-[#1e3a8a] md:text-2xl">{step.title}</h2>
@@ -735,11 +884,7 @@ export function HydrogenPlanner() {
         )}
         <p className="mt-2 text-sm text-zinc-600 md:text-base">{step.shortDescription}</p>
 
-        <div
-          className="mt-4 min-h-[3rem] space-y-3"
-          aria-live="polite"
-          aria-atomic="true"
-        >
+        <div className="mt-4 space-y-3" aria-live="polite" aria-atomic="true">
           {workflowComplete && (
             <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900" role="status">
               Workflow marked complete. Your draft remains in this browser (localStorage) until you clear site data or we
@@ -748,10 +893,10 @@ export function HydrogenPlanner() {
           )}
         </div>
 
-        <div className="mt-6">
+        <div className="mt-5">
           {currentStep === 0 && (
-            <div className="grid gap-6 lg:grid-cols-2">
-              <fieldset className="rounded-xl border border-zinc-200 bg-zinc-50/80 p-5">
+            <div className="space-y-4">
+              <fieldset className="rounded-xl border border-zinc-200 bg-zinc-50/80 p-4 md:p-5">
                 <legend className="px-1 text-sm font-semibold text-zinc-800">Problem statement</legend>
                 <label className="mt-2 block">
                   <span className={labelClass}>What hydrogen challenge are you solving?</span>
@@ -803,7 +948,7 @@ export function HydrogenPlanner() {
                   </label>
                 </div>
 
-                <div className="mt-5 flex flex-wrap gap-2">
+                <div className="mt-4 flex flex-wrap gap-2">
                   <button
                     type="button"
                     onClick={addProblemMilestone}
@@ -812,24 +957,10 @@ export function HydrogenPlanner() {
                   >
                     Save milestone
                   </button>
-                  <button
-                    type="button"
-                    onClick={generateInitialWorkplanFromConstraints}
-                    className="rounded-lg bg-[#f97316] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-orange-600"
-                  >
-                    Generate initial workplan
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCurrentStep(1)}
-                    className="rounded-lg bg-[#1e3a8a] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-sky-950"
-                  >
-                    Continue → Location
-                  </button>
                 </div>
               </fieldset>
 
-              <fieldset className="rounded-xl border border-orange-200 bg-orange-50/40 p-5">
+              <fieldset className="rounded-xl border border-orange-200 bg-orange-50/40 p-4 md:p-5">
                 <legend className="px-1 text-sm font-semibold text-amber-900">Scope, success & constraints</legend>
 
                 <label className="mt-2 block">
@@ -985,11 +1116,36 @@ export function HydrogenPlanner() {
                   ))}
                 </div>
               </fieldset>
+
+              {!canContinueFromProblem && (
+                <p className="rounded-lg border border-dashed border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
+                  To go to Location, add a short statement (20+ characters), choose a primary use case, at least one
+                  success criterion, and a geography scope. The footer action below adds constraint-based workplan items
+                  and continues.
+                </p>
+              )}
             </div>
           )}
 
           {currentStep === 1 && (
             <div className="space-y-6">
+              {planningProfile.guidance.length > 0 && (
+                <div className="grid gap-3 md:grid-cols-2" role="status" aria-label="Problem definition guidance">
+                  {planningProfile.guidance.map((g) => (
+                    <div
+                      key={g.title}
+                      className={`rounded-xl border px-4 py-3 text-sm ${
+                        g.tone === "warn"
+                          ? "border-amber-200 bg-amber-50 text-amber-950"
+                          : "border-sky-200 bg-sky-50 text-sky-950"
+                      }`}
+                    >
+                      <p className="text-xs font-semibold uppercase tracking-wider opacity-80">{g.title}</p>
+                      <p className="mt-1 text-xs opacity-90">{g.body}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm ring-1 ring-zinc-950/[0.04]">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
                   <div>
@@ -1295,52 +1451,71 @@ export function HydrogenPlanner() {
           )}
 
           {currentStep === 4 && (
-            <div className="grid gap-6 lg:grid-cols-2">
-              <fieldset className="rounded-xl border border-zinc-200 bg-zinc-50/80 p-5">
-                <legend className="px-1 text-sm font-semibold text-zinc-800">Gate scores</legend>
-                <p className="mt-2 text-xs text-zinc-600">Low / medium / high confidence for each dimension.</p>
-                {(
-                  [
-                    ["technical", "Technical feasibility"],
-                    ["regulatory", "Regulatory path"],
-                    ["commercial", "Commercial viability"],
-                    ["offtake", "Offtake clarity"],
-                  ] as const
-                ).map(([key, lab]) => (
-                  <label key={key} className="mt-4 block">
-                    <span className={labelClass}>{lab}</span>
-                    <select
-                      className={inputClass}
-                      value={state.assessment[key]}
-                      onChange={(e) =>
-                        setState((s) => ({
-                          ...s,
-                          assessment: { ...s.assessment, [key]: e.target.value },
-                        }))
-                      }
+            <div className="space-y-4">
+              {planningProfile.guidance.length > 0 && (
+                <div className="grid gap-3 md:grid-cols-2" role="status" aria-label="Problem definition guidance">
+                  {planningProfile.guidance.map((g) => (
+                    <div
+                      key={g.title}
+                      className={`rounded-xl border px-4 py-3 text-sm ${
+                        g.tone === "warn"
+                          ? "border-amber-200 bg-amber-50 text-amber-950"
+                          : "border-sky-200 bg-sky-50 text-sky-950"
+                      }`}
                     >
-                      <option value="">Select…</option>
-                      <option value="low">Low</option>
-                      <option value="medium">Medium</option>
-                      <option value="high">High</option>
-                    </select>
+                      <p className="text-xs font-semibold uppercase tracking-wider opacity-80">{g.title}</p>
+                      <p className="mt-1 text-xs opacity-90">{g.body}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="grid gap-6 lg:grid-cols-2">
+                <fieldset className="rounded-xl border border-zinc-200 bg-zinc-50/80 p-5">
+                  <legend className="px-1 text-sm font-semibold text-zinc-800">Gate scores</legend>
+                  <p className="mt-2 text-xs text-zinc-600">Low / medium / high confidence for each dimension.</p>
+                  {(
+                    [
+                      ["technical", "Technical feasibility"],
+                      ["regulatory", "Regulatory path"],
+                      ["commercial", "Commercial viability"],
+                      ["offtake", "Offtake clarity"],
+                    ] as const
+                  ).map(([key, lab]) => (
+                    <label key={key} className="mt-4 block">
+                      <span className={labelClass}>{lab}</span>
+                      <select
+                        className={inputClass}
+                        value={state.assessment[key]}
+                        onChange={(e) =>
+                          setState((s) => ({
+                            ...s,
+                            assessment: { ...s.assessment, [key]: e.target.value },
+                          }))
+                        }
+                      >
+                        <option value="">Select…</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                      </select>
+                    </label>
+                  ))}
+                </fieldset>
+                <fieldset className="rounded-xl border border-orange-200 bg-orange-50/40 p-5">
+                  <legend className="px-1 text-sm font-semibold text-amber-900">Gate decision</legend>
+                  <label className="mt-2 block">
+                    <span className={labelClass}>Notes (go / iterate / park)</span>
+                    <textarea
+                      className={`${inputClass} min-h-[200px] resize-y`}
+                      value={state.assessment.notes}
+                      onChange={(e) =>
+                        setState((s) => ({ ...s, assessment: { ...s.assessment, notes: e.target.value } }))
+                      }
+                      placeholder="Document rationale, dependencies, and what would change the call."
+                    />
                   </label>
-                ))}
-              </fieldset>
-              <fieldset className="rounded-xl border border-orange-200 bg-orange-50/40 p-5">
-                <legend className="px-1 text-sm font-semibold text-amber-900">Gate decision</legend>
-                <label className="mt-2 block">
-                  <span className={labelClass}>Notes (go / iterate / park)</span>
-                  <textarea
-                    className={`${inputClass} min-h-[200px] resize-y`}
-                    value={state.assessment.notes}
-                    onChange={(e) =>
-                      setState((s) => ({ ...s, assessment: { ...s.assessment, notes: e.target.value } }))
-                    }
-                    placeholder="Document rationale, dependencies, and what would change the call."
-                  />
-                </label>
-              </fieldset>
+                </fieldset>
+              </div>
             </div>
           )}
 
@@ -1529,10 +1704,11 @@ export function HydrogenPlanner() {
         </button>
         <button
           type="button"
-          onClick={currentStep === last ? finish : goNext}
-          className="rounded-lg bg-[#f97316] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-orange-600"
+          onClick={handleFooterNext}
+          disabled={currentStep === 0 && !canContinueFromProblem}
+          className="rounded-lg bg-[#f97316] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {currentStep === last ? "Finish" : "Next Step →"}
+          {currentStep === last ? "Finish" : currentStep === 0 ? "Next: Location (workplan) →" : "Next Step →"}
         </button>
       </footer>
     </div>
