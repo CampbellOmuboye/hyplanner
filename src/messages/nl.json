@@ -1,0 +1,47 @@
+{
+  "app": {
+    "title": "Opportunity Atlas",
+    "subtitle": "Ruimtelijke infrastructuur kansen-informatie"
+  },
+  "lens": {
+    "label": "Evaluatielens",
+    "hydrogenProduction": "Waterstofproductie",
+    "hydrogenDemand": "Waterstofvraagclusters",
+    "hydrogenTransport": "Waterstoftransportinfrastructuur",
+    "ccusHubs": "CCUS-hubs",
+    "industrialElectrification": "Industriële elektrificatie"
+  },
+  "language": {
+    "label": "Taal",
+    "en": "English",
+    "nl": "Nederlands"
+  },
+  "map": {
+    "legendTitle": "Kans",
+    "emerging": "Opkomend",
+    "viable": "Haalbaar",
+    "investable": "Investeringswaardig",
+    "layersTitle": "Infrastructuurlagen"
+  },
+  "layers": {
+    "ports": "Havens",
+    "hydrogenPipelines": "Waterstofleidingen",
+    "powerGrid": "Energienet",
+    "industrialClusters": "Industriële clusters",
+    "renewableSites": "Hernieuwbare energie",
+    "co2Transport": "CO₂-transport"
+  },
+  "panel": {
+    "close": "Sluiten",
+    "opportunitySummary": "Kanssamenvatting",
+    "readinessScores": "Gereedheidsscores",
+    "energyReadiness": "Energie-gereedheid",
+    "infrastructureReadiness": "Infrastructuur-gereedheid",
+    "policyReadiness": "Beleidsgereedheid",
+    "ecosystemReadiness": "Ecosysteem-gereedheid",
+    "infrastructureSignals": "Infrastructuursignalen",
+    "ecosystemActors": "Ecosysteemactoren",
+    "opportunityDrivers": "Kansdrijvers",
+    "developmentGaps": "Ontwikkelingslacunes"
+  }
+}

@@ -1,8 +1,12 @@
 "use client";
 
+/* eslint-disable react-hooks/set-state-in-effect */
+
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { WORKFLOW_STEPS, WORKFLOW_STEP_COUNT } from "@/lib/hyplanner-workflow";
+import { loadProjectVersion } from "@/lib/hyplanner-projects-storage";
 import type { PlannerState } from "./HydrogenPlanner";
 
 const STORAGE_KEY = "hyplanner.project.v1";
@@ -48,9 +52,26 @@ export function GanttTimeline() {
   const [zoom, setZoom] = useState<Zoom>("week");
   const [projectTitle, setProjectTitle] = useState("Untitled project");
 
+  const searchParams = useSearchParams();
+  const projectIdFromUrl = searchParams.get("projectId");
+  const versionIdFromUrl = searchParams.get("versionId");
+
   useEffect(() => {
+    if (projectIdFromUrl) {
+      const snap = loadProjectVersion(projectIdFromUrl, versionIdFromUrl ?? undefined);
+      if (snap?.state?.projectTitle) {
+        setProjectTitle(snap.state.projectTitle.trim() || "Untitled project");
+        return;
+      }
+    }
     setProjectTitle(readProjectTitle());
-  }, []);
+  }, [projectIdFromUrl, versionIdFromUrl]);
+
+  const backHref = projectIdFromUrl
+    ? `/planner?projectId=${encodeURIComponent(projectIdFromUrl)}${
+        versionIdFromUrl ? `&versionId=${encodeURIComponent(versionIdFromUrl)}` : ""
+      }`
+    : "/planner";
 
   const { anchor, totalDays, rows, todayOffset } = useMemo(() => {
     const anchorDate = startOfDay(addDays(new Date(), -7));
@@ -138,7 +159,7 @@ export function GanttTimeline() {
             </button>
           </div>
           <Link
-            href="/planner"
+            href={backHref}
             className="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
           >
             ← Back to planner

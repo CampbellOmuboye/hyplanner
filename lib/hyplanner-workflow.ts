@@ -1,4 +1,4 @@
-/** Single source of truth for the 7-step HyPlanner journey (landing + /planner). */
+/** Single source of truth for the HyPlanner journey (landing + /planner). */
 
 export type WorkflowStep = {
   slug: string;
@@ -10,6 +10,13 @@ export type WorkflowStep = {
 };
 
 export const WORKFLOW_STEPS: readonly WorkflowStep[] = [
+  {
+    slug: "problem",
+    displayId: "00",
+    title: "Define the challenge",
+    tool: "Problem definition",
+    shortDescription: "Clarify the use case, scope, constraints, and success criteria.",
+  },
   {
     slug: "location",
     displayId: "01",

@@ -1,0 +1,47 @@
+{
+  "app": {
+    "title": "Opportunity Atlas",
+    "subtitle": "Spatial infrastructure opportunity intelligence"
+  },
+  "lens": {
+    "label": "Evaluation lens",
+    "hydrogenProduction": "Hydrogen production",
+    "hydrogenDemand": "Hydrogen demand clusters",
+    "hydrogenTransport": "Hydrogen transport infrastructure",
+    "ccusHubs": "CCUS hubs",
+    "industrialElectrification": "Industrial electrification"
+  },
+  "language": {
+    "label": "Language",
+    "en": "English",
+    "nl": "Nederlands"
+  },
+  "map": {
+    "legendTitle": "Opportunity",
+    "emerging": "Emerging",
+    "viable": "Viable",
+    "investable": "Investable",
+    "layersTitle": "Infrastructure layers"
+  },
+  "layers": {
+    "ports": "Ports",
+    "hydrogenPipelines": "Hydrogen pipelines",
+    "powerGrid": "Power grid",
+    "industrialClusters": "Industrial clusters",
+    "renewableSites": "Renewable energy sites",
+    "co2Transport": "CO₂ transport"
+  },
+  "panel": {
+    "close": "Close",
+    "opportunitySummary": "Opportunity summary",
+    "readinessScores": "Readiness scores",
+    "energyReadiness": "Energy readiness",
+    "infrastructureReadiness": "Infrastructure readiness",
+    "policyReadiness": "Policy readiness",
+    "ecosystemReadiness": "Ecosystem readiness",
+    "infrastructureSignals": "Infrastructure signals",
+    "ecosystemActors": "Ecosystem actors",
+    "opportunityDrivers": "Opportunity drivers",
+    "developmentGaps": "Development gaps"
+  }
+}

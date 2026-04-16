@@ -1,6 +1,7 @@
 import { GanttTimeline } from "@/app/components/GanttTimeline";
 import Link from "next/link";
 import type { Metadata } from "next";
+import { Suspense } from "react";
 
 export const metadata: Metadata = {
   title: "Timeline",
@@ -39,7 +40,9 @@ export default function GanttPage() {
           </li>
         </ol>
       </nav>
-      <GanttTimeline />
+      <Suspense fallback={<div className="text-sm text-zinc-600">Loading timeline…</div>}>
+        <GanttTimeline />
+      </Suspense>
     </div>
   );
 }

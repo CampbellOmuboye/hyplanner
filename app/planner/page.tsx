@@ -1,6 +1,7 @@
 import { HydrogenPlanner } from "../components/HydrogenPlanner";
 import Link from "next/link";
 import type { Metadata } from "next";
+import { Suspense } from "react";
 
 export const metadata: Metadata = {
   title: "Planner",
@@ -28,7 +29,9 @@ export default function PlannerPage() {
           </li>
         </ol>
       </nav>
-      <HydrogenPlanner />
+      <Suspense fallback={<div className="text-sm text-zinc-600">Loading planner…</div>}>
+        <HydrogenPlanner />
+      </Suspense>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { WORKFLOW_STEPS } from "@/lib/hyplanner-workflow";
 import { WorkflowStepIcon } from "./WorkflowStepIcon";
+import { ProjectLoadPanel } from "./ProjectLoadPanel";
 
 export function HyPlannerLanding() {
   const year = new Date().getFullYear();
@@ -29,12 +30,6 @@ export function HyPlannerLanding() {
             >
               Workflow
             </a>
-            <Link
-              href="/planner"
-              className="inline-flex min-h-9 min-w-[7.5rem] items-center justify-center rounded-md bg-orange-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-orange-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-600"
-            >
-              Start planning
-            </Link>
           </nav>
         </div>
       </header>
@@ -53,10 +48,10 @@ export function HyPlannerLanding() {
               </p>
               <div className="mt-10 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-center lg:justify-start">
                 <Link
-                  href="/planner"
-                  className="inline-flex min-h-11 items-center justify-center rounded-lg bg-orange-500 px-6 py-3 text-sm font-semibold text-white shadow-md transition-colors hover:bg-orange-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-600"
+                  href="/planner?new=1"
+                  className="inline-flex min-h-11 items-center justify-center rounded-lg border border-orange-300 bg-white px-6 py-3 text-sm font-semibold text-orange-700 shadow-sm transition-colors hover:border-orange-400 hover:bg-orange-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-600"
                 >
-                  Start planning
+                  Start new project
                 </Link>
                 <a
                   href="#workflow"
@@ -64,6 +59,17 @@ export function HyPlannerLanding() {
                 >
                   View workflow
                 </a>
+              </div>
+
+              <div className="mt-6 max-w-xl">
+                <details className="rounded-xl border border-zinc-200 bg-white/60 p-3 shadow-sm">
+                  <summary className="cursor-pointer list-none rounded-lg px-2 py-2 text-sm font-semibold text-zinc-900 hover:bg-zinc-50">
+                    Load saved project
+                  </summary>
+                  <div className="mt-3">
+                    <ProjectLoadPanel />
+                  </div>
+                </details>
               </div>
             </header>
           </div>
@@ -81,7 +87,7 @@ export function HyPlannerLanding() {
               </p>
             </div>
 
-            <ul className="mt-10 grid grid-cols-1 gap-5 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
+            <ul className="mt-10 grid grid-cols-1 gap-5 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8">
               {WORKFLOW_STEPS.map((step, i) => (
                 <li
                   key={step.slug}
