@@ -48,19 +48,51 @@ type ProblemDefinition = {
   constraints: Record<ProblemConstraintKey, { status: ProblemConstraintStatus; notes: string }>;
 };
 
+export type LocationSignals = { renewables: boolean; grid: boolean; transport: boolean; industry: boolean };
+
+export type LocationCandidate = {
+  id: string;
+  regionId?: string;
+  name: string;
+  boundary: string;
+  notes: string;
+  rationale: string;
+  signals: LocationSignals;
+  rank: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WorkplanTaskStatus = "todo" | "in_progress" | "blocked" | "done";
+export type WorkplanTaskCategory = "workplan" | "risk-mitigation" | "stakeholder" | "data";
+
+export type WorkplanTask = {
+  id: string;
+  title: string;
+  description: string;
+  stepSlug?: string;
+  category: WorkplanTaskCategory;
+  status: WorkplanTaskStatus;
+  owner: string;
+  startDate: string;
+  dueDate: string;
+  dependsOnIds: string[];
+  evidenceLinks: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type PlannerState = {
   projectTitle: string;
   problem: ProblemDefinition;
   location: {
-    region: string;
-    boundary: string;
-    notes: string;
-    selectedRegionId?: string;
-    signals: { renewables: boolean; grid: boolean; transport: boolean; industry: boolean };
+    activeCandidateId: string;
+    candidates: LocationCandidate[];
   };
   stakeholders: StakeholderRow[];
   demand: { baselineTPerYear: string; scenario: string; sector: string; assumptions: string };
   assessment: { technical: string; regulatory: string; commercial: string; offtake: string; notes: string };
+  workplan: { tasks: WorkplanTask[] };
   capacity: {
     hydrogenSafety: boolean;
     markets: boolean;
@@ -72,7 +104,23 @@ export type PlannerState = {
   feedback: { roadmapConnect: boolean; roadmapApis: boolean; roadmapReporting: boolean; comments: string };
 };
 
+function isoNow() {
+  return new Date().toISOString();
+}
+
+function isoDatePlusDays(n: number) {
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+function makeId(prefix: string) {
+  return typeof crypto !== "undefined" && crypto.randomUUID ? `${prefix}${crypto.randomUUID()}` : `${prefix}${Date.now()}`;
+}
+
 function createInitialState(): PlannerState {
+  const now = isoNow();
+  const candidateId = makeId("lc-");
   return {
     projectTitle: "",
     problem: {
@@ -93,15 +141,26 @@ function createInitialState(): PlannerState {
       },
     },
     location: {
-      region: "",
-      boundary: "",
-      notes: "",
-      selectedRegionId: undefined,
-      signals: { renewables: false, grid: false, transport: false, industry: false },
+      activeCandidateId: candidateId,
+      candidates: [
+        {
+          id: candidateId,
+          regionId: undefined,
+          name: "",
+          boundary: "",
+          notes: "",
+          rationale: "",
+          signals: { renewables: false, grid: false, transport: false, industry: false },
+          rank: 1,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
     },
     stakeholders: [],
     demand: { baselineTPerYear: "", scenario: "mid", sector: "", assumptions: "" },
     assessment: { technical: "", regulatory: "", commercial: "", offtake: "", notes: "" },
+    workplan: { tasks: [] },
     capacity: { hydrogenSafety: false, markets: false, operations: false, standards: false, targetQuarter: "" },
     expert: { objectives: "", questions: "", contact: "email" },
     feedback: { roadmapConnect: false, roadmapApis: false, roadmapReporting: false, comments: "" },
@@ -122,6 +181,69 @@ type PersistedPayload = {
   workflowComplete: boolean;
 };
 
+function getActiveLocationCandidate(s: PlannerState): LocationCandidate {
+  const active = s.location.candidates.find((c) => c.id === s.location.activeCandidateId);
+  return active ?? s.location.candidates[0];
+}
+
+function normalizePlannerState(raw: PlannerState): PlannerState {
+  const base = createInitialState();
+  const merged: PlannerState = {
+    ...base,
+    ...raw,
+    problem: { ...base.problem, ...(raw.problem ?? base.problem) },
+    demand: { ...base.demand, ...(raw.demand ?? base.demand) },
+    assessment: { ...base.assessment, ...(raw.assessment ?? base.assessment) },
+    capacity: { ...base.capacity, ...(raw.capacity ?? base.capacity) },
+    expert: { ...base.expert, ...(raw.expert ?? base.expert) },
+    feedback: { ...base.feedback, ...(raw.feedback ?? base.feedback) },
+    stakeholders: Array.isArray(raw.stakeholders) ? raw.stakeholders : [],
+    location: base.location,
+    workplan: base.workplan,
+  };
+
+  const loc = (raw as unknown as { location?: Partial<PlannerState["location"]> })?.location;
+  if (loc && Array.isArray((loc as any).candidates)) {
+    const candidates = ((loc as any).candidates as unknown[]).filter(Boolean) as LocationCandidate[];
+    const activeId =
+      typeof (loc as any).activeCandidateId === "string" ? ((loc as any).activeCandidateId as string) : "";
+    merged.location = {
+      activeCandidateId:
+        candidates.find((c) => c.id === activeId)?.id ?? candidates[0]?.id ?? base.location.activeCandidateId,
+      candidates: candidates.length > 0 ? candidates : base.location.candidates,
+    };
+  } else {
+    // Back-compat: older single-location shape.
+    const legacy = (loc ?? (raw as any).location ?? {}) as any;
+    const now = isoNow();
+    const candidateId = makeId("lc-");
+    merged.location = {
+      activeCandidateId: candidateId,
+      candidates: [
+        {
+          id: candidateId,
+          regionId: typeof legacy.selectedRegionId === "string" ? legacy.selectedRegionId : undefined,
+          name: typeof legacy.region === "string" ? legacy.region : "",
+          boundary: typeof legacy.boundary === "string" ? legacy.boundary : "",
+          notes: typeof legacy.notes === "string" ? legacy.notes : "",
+          rationale: "",
+          signals: (legacy.signals as LocationSignals) ?? { renewables: false, grid: false, transport: false, industry: false },
+          rank: 1,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    };
+  }
+
+  const wp = (raw as any).workplan;
+  merged.workplan = {
+    tasks: wp && Array.isArray(wp.tasks) ? (wp.tasks as WorkplanTask[]) : [],
+  };
+
+  return merged;
+}
+
 function loadPersisted(): PersistedPayload | null {
   if (typeof window === "undefined") return null;
   try {
@@ -129,7 +251,7 @@ function loadPersisted(): PersistedPayload | null {
     if (!raw) return null;
     const data = JSON.parse(raw) as PersistedPayload;
     if (data?.v !== 1 || !data.state) return null;
-    return data;
+    return { ...data, state: normalizePlannerState(data.state) };
   } catch {
     return null;
   }
@@ -153,11 +275,12 @@ function scoreProblem(s: PlannerState): number {
 }
 
 function scoreLocation(s: PlannerState): number {
+  const c = getActiveLocationCandidate(s);
   let x = 0;
   if (s.projectTitle.trim()) x += 0.35;
-  if (s.location.region.trim()) x += 0.35;
-  if (Object.values(s.location.signals).some(Boolean)) x += 0.2;
-  if (s.location.boundary) x += 0.1;
+  if ((c?.name ?? "").trim()) x += 0.35;
+  if (Object.values(c?.signals ?? {}).some(Boolean)) x += 0.2;
+  if (c?.boundary) x += 0.1;
   return Math.min(1, x);
 }
 
@@ -263,12 +386,12 @@ export function HydrogenPlanner() {
   const [projectSaveStatus, setProjectSaveStatus] = useState<SaveStatus>("idle");
   const [projectLastSavedAt, setProjectLastSavedAt] = useState<Date | null>(null);
 
-  const [selectedOpportunityRegionId, setSelectedOpportunityRegionId] = useState<string | null>(null);
-
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const last = WORKFLOW_STEP_COUNT - 1;
   const step = WORKFLOW_STEPS[currentStep];
+  const activeLocationCandidate = useMemo(() => getActiveLocationCandidate(state), [state.location]);
+  const selectedOpportunityRegionId = activeLocationCandidate.regionId ?? null;
   const { overall, perStep } = useMemo(() => computeProjectCompletion(state), [state]);
   const planningProfile = useMemo(
     () =>
@@ -303,7 +426,7 @@ export function HydrogenPlanner() {
     if (projectIdFromUrl) {
       const snap = loadProjectVersion(projectIdFromUrl, versionIdFromUrl ?? undefined);
       if (snap) {
-        setState(snap.state);
+        setState(normalizePlannerState(snap.state));
         setCurrentStep(Math.min(last, Math.max(0, snap.currentStep)));
         setDecisions(Array.isArray(snap.decisions) ? snap.decisions : []);
         setWorkflowComplete(Boolean(snap.workflowComplete));
@@ -314,7 +437,7 @@ export function HydrogenPlanner() {
       } else {
         const p = loadPersisted();
         if (p) {
-          setState(p.state);
+          setState(normalizePlannerState(p.state));
           setCurrentStep(Math.min(WORKFLOW_STEP_COUNT - 1, Math.max(0, p.currentStep)));
           setDecisions(Array.isArray(p.decisions) ? p.decisions : []);
           setWorkflowComplete(Boolean(p.workflowComplete));
@@ -330,7 +453,7 @@ export function HydrogenPlanner() {
 
     const p = loadPersisted();
     if (p) {
-      setState(p.state);
+      setState(normalizePlannerState(p.state));
       setCurrentStep(Math.min(WORKFLOW_STEP_COUNT - 1, Math.max(0, p.currentStep)));
       setDecisions(Array.isArray(p.decisions) ? p.decisions : []);
       setWorkflowComplete(Boolean(p.workflowComplete));
@@ -414,24 +537,27 @@ export function HydrogenPlanner() {
     // Step-entry soft defaults derived from Step 0.
     if (currentStep === 1) {
       setState((s) => {
-        const next = { ...s };
-        let changed = false;
+        const activeId = s.location.activeCandidateId;
+        const idx = s.location.candidates.findIndex((c) => c.id === activeId);
+        if (idx === -1) return s;
 
-        if (!next.location.region.trim() && planningProfile.seedLocationRegion) {
-          next.location = { ...next.location, region: planningProfile.seedLocationRegion };
-          changed = true;
+        const active = s.location.candidates[idx];
+        const patch: Partial<LocationCandidate> = {};
+
+        if (!active.name.trim() && planningProfile.seedLocationRegion) {
+          patch.name = planningProfile.seedLocationRegion;
         }
 
-        const anySignals = Object.values(next.location.signals).some(Boolean);
+        const anySignals = Object.values(active.signals).some(Boolean);
         if (!anySignals) {
-          next.location = {
-            ...next.location,
-            signals: { ...next.location.signals, ...planningProfile.preferredSignals },
-          };
-          changed = true;
+          patch.signals = { ...active.signals, ...planningProfile.preferredSignals };
         }
 
-        return changed ? next : s;
+        if (Object.keys(patch).length === 0) return s;
+        const now = isoNow();
+        const nextCandidates = [...s.location.candidates];
+        nextCandidates[idx] = { ...active, ...patch, updatedAt: now };
+        return { ...s, location: { ...s.location, candidates: nextCandidates } };
       });
     }
 
@@ -590,18 +716,46 @@ export function HydrogenPlanner() {
     const region = getRegionById(regionId);
     if (!region) return;
 
-    const existing = new Set(decisions.map((d) => d.text));
-    const nowIso = new Date().toISOString();
-    const mkId = (suffix: number) =>
-      typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `d-${Date.now()}-${suffix}`;
+    const nowIso = isoNow();
+    const today = isoDatePlusDays(0);
+    const due = isoDatePlusDays(21);
 
-    const items = region.developmentGaps.map((g) => `[Workplan] ${g}`);
-    const newEntries: DecisionLogEntry[] = items
-      .filter((text) => !existing.has(text))
-      .map((text, i) => ({ id: mkId(i), text, at: nowIso }));
+    const gapTitles = (region.developmentGaps ?? []).map((g) => g.trim()).filter(Boolean);
+    if (gapTitles.length === 0) return;
 
-    if (newEntries.length === 0) return;
-    setDecisions((d) => [...newEntries, ...d]);
+    setState((s) => {
+      const existingTitles = new Set((s.workplan.tasks ?? []).map((t) => t.title.trim().toLowerCase()).filter(Boolean));
+      const additions: WorkplanTask[] = [];
+      gapTitles.forEach((title) => {
+        const key = title.toLowerCase();
+        if (existingTitles.has(key)) return;
+        existingTitles.add(key);
+        additions.push({
+          id: makeId("t-"),
+          title,
+          description: `Generated from Opportunity Map gaps for ${region.name}.`,
+          stepSlug: "location",
+          category: "data",
+          status: "todo",
+          owner: "",
+          startDate: today,
+          dueDate: due,
+          dependsOnIds: [],
+          evidenceLinks: [],
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        });
+      });
+      if (additions.length === 0) return s;
+      return { ...s, workplan: { ...s.workplan, tasks: [...additions, ...s.workplan.tasks] } };
+    });
+
+    const existingLogs = new Set(decisions.map((d) => d.text));
+    const newEntries: DecisionLogEntry[] = gapTitles
+      .map((title) => `[Workplan] Task created — ${title}`)
+      .filter((text) => !existingLogs.has(text))
+      .map((text) => ({ id: makeId("d-"), text, at: nowIso }));
+    if (newEntries.length) setDecisions((d) => [...newEntries, ...d]);
   };
 
   const addProblemMilestone = () => {
@@ -617,9 +771,15 @@ export function HydrogenPlanner() {
 
   const generateInitialWorkplanFromConstraints = () => {
     const constraints = state.problem.constraints;
-    const items: string[] = [];
+    const nowIso = isoNow();
+    const today = isoDatePlusDays(0);
+    const due = isoDatePlusDays(14);
+
+    const items: Array<{ title: string; description: string }> = [];
     const add = (label: string, notes: string) => {
-      items.push(`[Workplan] Validate ${label}${notes.trim() ? ` — ${notes.trim()}` : ""}`);
+      const title = `Validate ${label}`;
+      const description = notes.trim() ? `Constraint notes: ${notes.trim()}` : "";
+      items.push({ title, description });
     };
     if (constraints.gridCapacity.status !== "confirmed") add("grid capacity", constraints.gridCapacity.notes);
     if (constraints.permitting.status !== "confirmed") add("permitting pathway", constraints.permitting.notes);
@@ -629,15 +789,40 @@ export function HydrogenPlanner() {
     if (constraints.capexFunding.status !== "confirmed") add("capex / funding envelope", constraints.capexFunding.notes);
 
     if (items.length === 0) return;
-    const existing = new Set(decisions.map((d) => d.text));
-    const nowIso = new Date().toISOString();
-    const mkId = (suffix: number) =>
-      typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `d-${Date.now()}-${suffix}`;
+
+    setState((s) => {
+      const existingTitles = new Set((s.workplan.tasks ?? []).map((t) => t.title.trim().toLowerCase()).filter(Boolean));
+      const additions: WorkplanTask[] = [];
+      items.forEach((it) => {
+        const key = it.title.toLowerCase();
+        if (existingTitles.has(key)) return;
+        existingTitles.add(key);
+        additions.push({
+          id: makeId("t-"),
+          title: it.title,
+          description: it.description,
+          stepSlug: "problem",
+          category: "workplan",
+          status: "todo",
+          owner: "",
+          startDate: today,
+          dueDate: due,
+          dependsOnIds: [],
+          evidenceLinks: [],
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        });
+      });
+      if (additions.length === 0) return s;
+      return { ...s, workplan: { ...s.workplan, tasks: [...additions, ...s.workplan.tasks] } };
+    });
+
+    const existingLogs = new Set(decisions.map((d) => d.text));
     const newEntries: DecisionLogEntry[] = items
-      .filter((text) => !existing.has(text))
-      .map((text, i) => ({ id: mkId(i), text, at: nowIso }));
-    if (newEntries.length === 0) return;
-    setDecisions((d) => [...newEntries, ...d]);
+      .map((it) => `[Workplan] Task created — ${it.title}`)
+      .filter((text) => !existingLogs.has(text))
+      .map((text) => ({ id: makeId("d-"), text, at: nowIso }));
+    if (newEntries.length) setDecisions((d) => [...newEntries, ...d]);
   };
 
   const canContinueFromProblem =
@@ -717,7 +902,7 @@ export function HydrogenPlanner() {
     if (!activeProjectId) return;
     const snap = loadProjectVersion(activeProjectId, versionId);
     if (!snap) return;
-    setState(snap.state);
+    setState(normalizePlannerState(snap.state));
     setCurrentStep(Math.min(last, Math.max(0, snap.currentStep)));
     setDecisions(Array.isArray(snap.decisions) ? snap.decisions : []);
     setWorkflowComplete(Boolean(snap.workflowComplete));
@@ -1197,112 +1382,260 @@ export function HydrogenPlanner() {
                 )}
                 <div className="mt-4">
                   <HydrogenOpportunityMap
-                    signals={state.location.signals}
+                    signals={activeLocationCandidate.signals}
                     onSelectRegion={(regionId) => {
-                      setSelectedOpportunityRegionId(regionId);
                       const region = getRegionById(regionId);
                       if (!region) return;
                       const regionName = region.name?.trim() || "";
                       const notesStarter = buildNotesStarter(regionId);
-                      setState((s) => ({
-                        ...s,
-                        location: {
-                          ...s.location,
-                          selectedRegionId: regionId,
-                          region: regionName || s.location.region,
-                          notes:
-                            s.location.notes.trim().length === 0
-                              ? notesStarter
-                              : s.location.notes,
-                        },
-                      }));
+                      setState((s) => {
+                        const activeId = s.location.activeCandidateId;
+                        const idx = s.location.candidates.findIndex((c) => c.id === activeId);
+                        if (idx === -1) return s;
+                        const active = s.location.candidates[idx];
+                        const now = isoNow();
+                        const nextCandidates = [...s.location.candidates];
+                        nextCandidates[idx] = {
+                          ...active,
+                          regionId,
+                          name: regionName || active.name,
+                          notes: active.notes.trim().length === 0 ? notesStarter : active.notes,
+                          updatedAt: now,
+                        };
+                        return { ...s, location: { ...s.location, candidates: nextCandidates } };
+                      });
                     }}
                   />
                 </div>
               </div>
 
-              <div className="grid gap-6 lg:grid-cols-2">
+              <div className="grid gap-6 lg:grid-cols-3">
                 <fieldset className="rounded-xl border border-zinc-200 bg-zinc-50/80 p-5">
-                  <legend className="px-1 text-sm font-semibold text-zinc-800">Site & boundary</legend>
-                  <label className="mt-4 block">
-                    <span className={labelClass}>Working project title</span>
-                    <input
-                      className={inputClass}
-                      value={state.projectTitle}
-                      onChange={(e) => setState((s) => ({ ...s, projectTitle: e.target.value }))}
-                      placeholder="e.g. North Harbour H₂ valley"
-                    />
-                  </label>
-                  <label className="mt-4 block">
-                    <span className={labelClass}>Region / site description</span>
-                    <textarea
-                      className={`${inputClass} min-h-[88px] resize-y`}
-                      value={state.location.region}
-                      onChange={(e) =>
-                        setState((s) => ({ ...s, location: { ...s.location, region: e.target.value } }))
-                      }
-                      placeholder="Municipalities, ports, corridors, or coordinates (free text)."
-                    />
-                  </label>
-                  <label className="mt-4 block">
-                    <span className={labelClass}>Study boundary</span>
-                    <select
-                      className={inputClass}
-                      value={state.location.boundary}
-                      onChange={(e) =>
-                        setState((s) => ({ ...s, location: { ...s.location, boundary: e.target.value } }))
-                      }
-                    >
-                      <option value="">Select…</option>
-                      <option value="50km">~50 km radius</option>
-                      <option value="100km">~100 km radius</option>
-                      <option value="watershed">Watershed / basin</option>
-                      <option value="admin">Administrative region</option>
-                      <option value="other">Other (see notes)</option>
-                    </select>
-                  </label>
-                  <label className="mt-4 block">
-                    <span className={labelClass}>Desk notes</span>
-                    <textarea
-                      className={`${inputClass} min-h-[72px] resize-y`}
-                      value={state.location.notes}
-                      onChange={(e) => setState((s) => ({ ...s, location: { ...s.location, notes: e.target.value } }))}
-                      placeholder="Data sources, exclusions, competing sites…"
-                    />
-                  </label>
-                </fieldset>
-                <fieldset className="rounded-xl border border-orange-200 bg-orange-50/40 p-5">
-                  <legend className="px-1 text-sm font-semibold text-amber-900">Opportunity signals</legend>
-                  <p className="mt-2 text-xs text-amber-900/80">
-                    Check what is evidenced for this geography (desk review).
+                  <legend className="px-1 text-sm font-semibold text-zinc-800">Location shortlist</legend>
+                  <p className="mt-2 text-xs text-zinc-600">
+                    Compare 1–3 candidates. Pick one as active, then capture boundary + signals + rationale.
                   </p>
-                  <div className="mt-4 space-y-3 text-sm">
-                    {(
-                      [
-                        ["renewables", "Renewable generation in reach"],
-                        ["grid", "Grid capacity / queue visibility"],
-                        ["transport", "H₂-relevant transport corridor"],
-                        ["industry", "Industrial offtake / cluster"],
-                      ] as const
-                    ).map(([key, lab]) => (
-                      <label key={key} className="flex cursor-pointer items-center gap-2">
-                        <input
-                          type="checkbox"
-                          className="size-4 rounded border-zinc-300 text-sky-700"
-                          checked={state.location.signals[key]}
-                          onChange={(e) =>
-                            setState((s) => ({
-                              ...s,
-                              location: {
-                                ...s.location,
-                                signals: { ...s.location.signals, [key]: e.target.checked },
-                              },
-                            }))
-                          }
-                        />
-                        <span>{lab}</span>
-                      </label>
-                    ))}
+
+                  <div className="mt-4 space-y-2">
+                    {state.location.candidates.map((c, idx) => {
+                      const active = c.id === state.location.activeCandidateId;
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => setState((s) => ({ ...s, location: { ...s.location, activeCandidateId: c.id } }))}
+                          className={`w-full rounded-lg border px-3 py-2 text-left text-xs transition-colors ${
+                            active
+                              ? "border-sky-200 bg-sky-50 text-sky-950 ring-1 ring-sky-200"
+                              : "border-zinc-200 bg-white text-zinc-800 hover:bg-zinc-50"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-mono text-[10px] text-zinc-500">#{idx + 1}</span>
+                            <span className="truncate font-semibold">{c.name.trim() || "Untitled candidate"}</span>
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-2 text-[10px] text-zinc-500">
+                            <span>{Object.values(c.signals).filter(Boolean).length} signals</span>
+                            {c.boundary ? <span>Boundary: {c.boundary}</span> : <span>No boundary</span>}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setState((s) => {
+                          const now = isoNow();
+                          const nextRank = s.location.candidates.length + 1;
+                          const id = makeId("lc-");
+                          const nextCandidate: LocationCandidate = {
+                            id,
+                            regionId: undefined,
+                            name: "",
+                            boundary: "",
+                            notes: "",
+                            rationale: "",
+                            signals: { renewables: false, grid: false, transport: false, industry: false },
+                            rank: nextRank,
+                            createdAt: now,
+                            updatedAt: now,
+                          };
+                          return {
+                            ...s,
+                            location: {
+                              ...s.location,
+                              activeCandidateId: id,
+                              candidates: [...s.location.candidates, nextCandidate].map((c, i) => ({ ...c, rank: i + 1 })),
+                            },
+                          };
+                        })
+                      }
+                      className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs font-semibold text-zinc-800 hover:bg-zinc-50"
+                    >
+                      + Add candidate
+                    </button>
+                    <button
+                      type="button"
+                      disabled={state.location.candidates.length <= 1}
+                      onClick={() =>
+                        setState((s) => {
+                          if (s.location.candidates.length <= 1) return s;
+                          const nextCandidates = s.location.candidates
+                            .filter((c) => c.id !== s.location.activeCandidateId)
+                            .map((c, i) => ({ ...c, rank: i + 1 }));
+                          const nextActive = nextCandidates[0]?.id ?? s.location.activeCandidateId;
+                          return { ...s, location: { ...s.location, activeCandidateId: nextActive, candidates: nextCandidates } };
+                        })
+                      }
+                      className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Remove active
+                    </button>
+                  </div>
+                </fieldset>
+
+                <fieldset className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm ring-1 ring-zinc-950/[0.04] lg:col-span-2">
+                  <legend className="px-1 text-sm font-semibold text-zinc-800">Active candidate details</legend>
+
+                  <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                    <label className="block lg:col-span-2">
+                      <span className={labelClass}>Working project title</span>
+                      <input
+                        className={inputClass}
+                        value={state.projectTitle}
+                        onChange={(e) => setState((s) => ({ ...s, projectTitle: e.target.value }))}
+                        placeholder="e.g. North Harbour H₂ valley"
+                      />
+                    </label>
+
+                    <label className="block lg:col-span-2">
+                      <span className={labelClass}>Candidate name / site description</span>
+                      <textarea
+                        className={`${inputClass} min-h-[76px] resize-y`}
+                        value={activeLocationCandidate.name}
+                        onChange={(e) =>
+                          setState((s) => {
+                            const id = s.location.activeCandidateId;
+                            const idx = s.location.candidates.findIndex((c) => c.id === id);
+                            if (idx === -1) return s;
+                            const now = isoNow();
+                            const nextCandidates = [...s.location.candidates];
+                            nextCandidates[idx] = { ...nextCandidates[idx], name: e.target.value, updatedAt: now };
+                            return { ...s, location: { ...s.location, candidates: nextCandidates } };
+                          })
+                        }
+                        placeholder="Municipalities, ports, corridors, or coordinates (free text)."
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className={labelClass}>Study boundary</span>
+                      <select
+                        className={inputClass}
+                        value={activeLocationCandidate.boundary}
+                        onChange={(e) =>
+                          setState((s) => {
+                            const id = s.location.activeCandidateId;
+                            const idx = s.location.candidates.findIndex((c) => c.id === id);
+                            if (idx === -1) return s;
+                            const now = isoNow();
+                            const nextCandidates = [...s.location.candidates];
+                            nextCandidates[idx] = { ...nextCandidates[idx], boundary: e.target.value, updatedAt: now };
+                            return { ...s, location: { ...s.location, candidates: nextCandidates } };
+                          })
+                        }
+                      >
+                        <option value="">Select…</option>
+                        <option value="50km">~50 km radius</option>
+                        <option value="100km">~100 km radius</option>
+                        <option value="watershed">Watershed / basin</option>
+                        <option value="admin">Administrative region</option>
+                        <option value="other">Other (see notes)</option>
+                      </select>
+                    </label>
+
+                    <label className="block">
+                      <span className={labelClass}>Rationale</span>
+                      <input
+                        className={inputClass}
+                        value={activeLocationCandidate.rationale}
+                        onChange={(e) =>
+                          setState((s) => {
+                            const id = s.location.activeCandidateId;
+                            const idx = s.location.candidates.findIndex((c) => c.id === id);
+                            if (idx === -1) return s;
+                            const now = isoNow();
+                            const nextCandidates = [...s.location.candidates];
+                            nextCandidates[idx] = { ...nextCandidates[idx], rationale: e.target.value, updatedAt: now };
+                            return { ...s, location: { ...s.location, candidates: nextCandidates } };
+                          })
+                        }
+                        placeholder="Why this site vs others (one sentence)."
+                      />
+                    </label>
+
+                    <label className="block lg:col-span-2">
+                      <span className={labelClass}>Desk notes</span>
+                      <textarea
+                        className={`${inputClass} min-h-[88px] resize-y`}
+                        value={activeLocationCandidate.notes}
+                        onChange={(e) =>
+                          setState((s) => {
+                            const id = s.location.activeCandidateId;
+                            const idx = s.location.candidates.findIndex((c) => c.id === id);
+                            if (idx === -1) return s;
+                            const now = isoNow();
+                            const nextCandidates = [...s.location.candidates];
+                            nextCandidates[idx] = { ...nextCandidates[idx], notes: e.target.value, updatedAt: now };
+                            return { ...s, location: { ...s.location, candidates: nextCandidates } };
+                          })
+                        }
+                        placeholder="Data sources, exclusions, competing sites…"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="mt-6 rounded-xl border border-orange-200 bg-orange-50/40 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-amber-900">Opportunity signals</p>
+                    <p className="mt-2 text-xs text-amber-900/80">Check what is evidenced for this candidate (desk review).</p>
+                    <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+                      {(
+                        [
+                          ["renewables", "Renewable generation in reach"],
+                          ["grid", "Grid capacity / queue visibility"],
+                          ["transport", "H₂-relevant transport corridor"],
+                          ["industry", "Industrial offtake / cluster"],
+                        ] as const
+                      ).map(([key, lab]) => (
+                        <label key={key} className="flex cursor-pointer items-center gap-2">
+                          <input
+                            type="checkbox"
+                            className="size-4 rounded border-zinc-300 text-sky-700"
+                            checked={activeLocationCandidate.signals[key]}
+                            onChange={(e) =>
+                              setState((s) => {
+                                const id = s.location.activeCandidateId;
+                                const idx = s.location.candidates.findIndex((c) => c.id === id);
+                                if (idx === -1) return s;
+                                const now = isoNow();
+                                const nextCandidates = [...s.location.candidates];
+                                const curr = nextCandidates[idx];
+                                nextCandidates[idx] = {
+                                  ...curr,
+                                  signals: { ...curr.signals, [key]: e.target.checked },
+                                  updatedAt: now,
+                                };
+                                return { ...s, location: { ...s.location, candidates: nextCandidates } };
+                              })
+                            }
+                          />
+                          <span>{lab}</span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
                 </fieldset>
               </div>
