@@ -29,5 +29,5 @@ export const INFRASTRUCTURE_LAYERS: { id: InfrastructureLayerId; labelKey: strin
 // [lat, lng] for Leaflet
 export const NETHERLANDS_CENTER: [number, number] = [52.1, 5.4];
 
-export const NETHERLANDS_DEFAULT_ZOOM = 6;
+export const NETHERLANDS_DEFAULT_ZOOM = 7;
 

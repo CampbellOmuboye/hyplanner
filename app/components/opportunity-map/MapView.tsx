@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { MapContainer, TileLayer, GeoJSON, Circle, CircleMarker, Polyline } from "react-leaflet";
+import type { LatLngBoundsExpression } from "leaflet";
 import { MOCK_REGIONS, getRegionCenter } from "@/lib/opportunity-map/mockRegions";
 import {
   PORTS,
@@ -16,6 +17,12 @@ import type { OpportunityClassification } from "@/lib/opportunity-map/types";
 
 /** Circle radius in meters for opportunity indicators */
 const REGION_CIRCLE_RADIUS_M = 22_000;
+
+// Prevent zoom/pan beyond the Netherlands (with a small buffer).
+const NETHERLANDS_MAX_BOUNDS: LatLngBoundsExpression = [
+  [50.6, 3.1], // SW
+  [53.8, 7.4], // NE
+];
 
 function RegionLayer({
   onRegionClick,
@@ -172,6 +179,9 @@ export function MapView({
     <MapContainer
       center={NETHERLANDS_CENTER}
       zoom={NETHERLANDS_DEFAULT_ZOOM}
+      minZoom={7}
+      maxBounds={NETHERLANDS_MAX_BOUNDS}
+      maxBoundsViscosity={1.0}
       className="h-full w-full rounded-b-[10px]"
       scrollWheelZoom
     >

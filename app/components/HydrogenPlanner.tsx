@@ -20,6 +20,13 @@ import {
   type ProblemConstraintKey as ProfileConstraintKey,
   type ProblemConstraintStatus as ProfileConstraintStatus,
 } from "@/lib/planning-profile";
+import { computeDemandModel, validateDemandModel } from "@/lib/h2-calculator/dispatcher";
+import type {
+  DemandModelInput,
+  DemandModelResult,
+  UserType,
+  ValidationIssue,
+} from "@/lib/h2-calculator/types";
 import { WorkflowStepIcon } from "./WorkflowStepIcon";
 import { HydrogenOpportunityMap } from "./opportunity-map/HydrogenOpportunityMap";
 
@@ -91,6 +98,8 @@ export type PlannerState = {
   };
   stakeholders: StakeholderRow[];
   demand: { baselineTPerYear: string; scenario: string; sector: string; assumptions: string };
+  demandModel: DemandModelInput;
+  demandResults: DemandModelResult | null;
   assessment: { technical: string; regulatory: string; commercial: string; offtake: string; notes: string };
   workplan: { tasks: WorkplanTask[] };
   capacity: {
@@ -116,6 +125,145 @@ function isoDatePlusDays(n: number) {
 
 function makeId(prefix: string) {
   return typeof crypto !== "undefined" && crypto.randomUUID ? `${prefix}${crypto.randomUUID()}` : `${prefix}${Date.now()}`;
+}
+
+function deriveUserType(projectType: ProblemDefinition["projectType"]): UserType {
+  switch (projectType) {
+    case "production":
+      return "production_hub";
+    case "distribution":
+      return "distribution_logistics";
+    case "offtake":
+      return "offtake_cluster";
+    case "corridor":
+      return "transport_corridor";
+  }
+}
+
+function formatUserTypeLabel(u: UserType): string {
+  switch (u) {
+    case "production_hub":
+      return "Production hub";
+    case "distribution_logistics":
+      return "Distribution & logistics";
+    case "offtake_cluster":
+      return "Offtake cluster";
+    case "transport_corridor":
+      return "Transport corridor";
+  }
+}
+
+function formatNumber(n: unknown, opts?: Intl.NumberFormatOptions): string {
+  const x = typeof n === "number" ? n : Number(n);
+  if (!Number.isFinite(x)) return "—";
+  return new Intl.NumberFormat(undefined, opts).format(x);
+}
+
+function formatCurrencyEUR(n: unknown): string {
+  const x = typeof n === "number" ? n : Number(n);
+  if (!Number.isFinite(x)) return "—";
+  return new Intl.NumberFormat(undefined, { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(x);
+}
+
+/** Empty or non-numeric input → undefined (never NaN — keeps controlled inputs stable). */
+function parseOptionalFloat(raw: string): number | undefined {
+  const t = raw.trim();
+  if (t === "") return undefined;
+  const n = parseFloat(t);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function parseOptionalInt(raw: string): number | undefined {
+  const t = raw.trim();
+  if (t === "") return undefined;
+  const n = parseInt(t, 10);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** `value=` for number fields; treats NaN as empty (recovery if legacy state had NaN). */
+function finiteNumberFieldValue(v: number | undefined): string | number {
+  if (v === undefined) return "";
+  return Number.isFinite(v) ? v : "";
+}
+
+function demandScenarioBadgeClass(scenario: string | undefined): string {
+  switch (scenario) {
+    case "Low":
+      return "bg-emerald-100 text-emerald-900 ring-1 ring-emerald-200/80";
+    case "Medium":
+      return "bg-amber-100 text-amber-950 ring-1 ring-amber-200/80";
+    case "High":
+      return "bg-rose-100 text-rose-900 ring-1 ring-rose-200/80";
+    default:
+      return "bg-zinc-100 text-zinc-700 ring-1 ring-zinc-200/80";
+  }
+}
+
+function DemandKpiCard({
+  label,
+  value,
+  hint,
+  emphasis = "default",
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  emphasis?: "default" | "lead";
+}) {
+  return (
+    <div
+      className={`rounded-xl border p-4 shadow-sm transition-[box-shadow,transform] duration-200 ${
+        emphasis === "lead"
+          ? "border-orange-300/90 bg-gradient-to-br from-orange-50/90 via-white to-white ring-1 ring-orange-200/60"
+          : "border-zinc-200/85 bg-white hover:-translate-y-0.5 hover:shadow-md hover:ring-1 hover:ring-orange-100/80"
+      }`}
+    >
+      <p className="text-[11px] font-semibold uppercase tracking-[0.07em] text-zinc-500">{label}</p>
+      <p className="mt-2 text-2xl font-semibold tabular-nums tracking-tight text-zinc-900">{value}</p>
+      {hint ? <p className="mt-2 text-xs leading-relaxed text-zinc-500">{hint}</p> : null}
+    </div>
+  );
+}
+
+function defaultDemandModel(u: UserType): DemandModelInput {
+  const base = { global: {} };
+  switch (u) {
+    case "offtake_cluster":
+      return { user_type: u, ...base, annual_natural_gas_consumption_unit: "MWh", replacement_percentage: 0.3 };
+    case "production_hub":
+      return {
+        user_type: u,
+        global: { hydrogen_type: "Green" },
+        capacity_factor: 0.6,
+        efficiency_kWh_per_kg: 52,
+        capex: 0,
+        opex: 0,
+      };
+    case "distribution_logistics":
+      return {
+        user_type: u,
+        ...base,
+        hydrogen_volume_input_method: "from_demand",
+        transport_mode: "truck",
+        cost_per_km_per_kg: 0,
+      };
+    case "transport_corridor":
+      return { user_type: u, ...base, node_demands_kg: [], cost_per_km_per_kg: 0, loss_factor: 0 };
+  }
+}
+
+/** Resolve linked inputs (e.g. distribution from last production result) before validate/compute. */
+function buildDemandModelForRun(state: PlannerState): DemandModelInput {
+  const m = state.demandModel;
+  if (m.user_type !== "distribution_logistics") return m;
+  if (m.hydrogen_volume_input_method !== "from_production") return m;
+  const pr = state.demandResults;
+  const kg =
+    pr?.user_type === "production_hub" && typeof pr.summary_metrics?.annual_hydrogen_production_kg === "number"
+      ? (pr.summary_metrics.annual_hydrogen_production_kg as number)
+      : NaN;
+  if (!Number.isFinite(kg) || kg <= 0) return m;
+  return { ...m, hydrogen_input_value_kg: kg };
 }
 
 function createInitialState(): PlannerState {
@@ -159,6 +307,8 @@ function createInitialState(): PlannerState {
     },
     stakeholders: [],
     demand: { baselineTPerYear: "", scenario: "mid", sector: "", assumptions: "" },
+    demandModel: defaultDemandModel("production_hub"),
+    demandResults: null,
     assessment: { technical: "", regulatory: "", commercial: "", offtake: "", notes: "" },
     workplan: { tasks: [] },
     capacity: { hydrogenSafety: false, markets: false, operations: false, standards: false, targetQuarter: "" },
@@ -200,6 +350,8 @@ function normalizePlannerState(raw: PlannerState): PlannerState {
     stakeholders: Array.isArray(raw.stakeholders) ? raw.stakeholders : [],
     location: base.location,
     workplan: base.workplan,
+    demandModel: (raw as unknown as { demandModel?: DemandModelInput })?.demandModel ?? base.demandModel,
+    demandResults: (raw as unknown as { demandResults?: DemandModelResult | null })?.demandResults ?? null,
   };
 
   const loc = (raw as unknown as { location?: Partial<PlannerState["location"]> })?.location;
@@ -240,6 +392,12 @@ function normalizePlannerState(raw: PlannerState): PlannerState {
   merged.workplan = {
     tasks: wp && Array.isArray(wp.tasks) ? (wp.tasks as WorkplanTask[]) : [],
   };
+
+  const expectedUserType = deriveUserType(merged.problem.projectType);
+  if (!merged.demandModel || (merged.demandModel as any).user_type !== expectedUserType) {
+    merged.demandModel = defaultDemandModel(expectedUserType);
+    merged.demandResults = null;
+  }
 
   return merged;
 }
@@ -293,13 +451,8 @@ function scoreStakeholders(s: PlannerState): number {
 }
 
 function scoreDemand(s: PlannerState): number {
-  const n = parseFloat(s.demand.baselineTPerYear.replace(",", "."));
-  let x = 0;
-  if (!Number.isNaN(n) && n > 0) x += 0.45;
-  if (s.demand.sector) x += 0.35;
-  if (s.demand.scenario) x += 0.1;
-  if (s.demand.assumptions.trim().length >= 20) x += 0.1;
-  return Math.min(1, x);
+  // Demand step is considered complete when the user explicitly runs the calculator.
+  return s.demandResults ? 1 : 0;
 }
 
 function scoreAssessment(s: PlannerState): number {
@@ -373,6 +526,7 @@ export function HydrogenPlanner() {
   const [hydrated, setHydrated] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [demandIssues, setDemandIssues] = useState<ValidationIssue[]>([]);
 
   const searchParams = useSearchParams();
   const projectIdFromUrl = searchParams.get("projectId");
@@ -392,6 +546,7 @@ export function HydrogenPlanner() {
   const step = WORKFLOW_STEPS[currentStep];
   const activeLocationCandidate = useMemo(() => getActiveLocationCandidate(state), [state.location]);
   const selectedOpportunityRegionId = activeLocationCandidate.regionId ?? null;
+  const userType = useMemo(() => deriveUserType(state.problem.projectType), [state.problem.projectType]);
   const { overall, perStep } = useMemo(() => computeProjectCompletion(state), [state]);
   const planningProfile = useMemo(
     () =>
@@ -407,6 +562,14 @@ export function HydrogenPlanner() {
       }),
     [state.problem]
   );
+
+  useEffect(() => {
+    setState((s) => {
+      if (s.demandModel.user_type === userType) return s;
+      return { ...s, demandModel: defaultDemandModel(userType), demandResults: null };
+    });
+    setDemandIssues([]);
+  }, [userType]);
 
   useEffect(() => {
     if (startNewProject) {
@@ -942,6 +1105,9 @@ export function HydrogenPlanner() {
           <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Project</p>
           <p className="truncate text-sm font-semibold text-zinc-900 md:text-base">
             {state.projectTitle.trim() || "Untitled project"}
+          </p>
+          <p className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+            User type · <span className="text-zinc-700">{formatUserTypeLabel(userType)}</span>
           </p>
         </div>
         <div className="shrink-0 text-right text-xs text-zinc-500">
@@ -1726,59 +1892,817 @@ export function HydrogenPlanner() {
           {currentStep === 3 && (
             <div className="grid gap-6 lg:grid-cols-2">
               <fieldset className="rounded-xl border border-zinc-200 bg-zinc-50/80 p-5">
-                <legend className="px-1 text-sm font-semibold text-zinc-800">Demand parameters</legend>
-                <label className="mt-2 block">
-                  <span className={labelClass}>Baseline H₂ demand (t/yr)</span>
-                  <input
-                    className={inputClass}
-                    inputMode="decimal"
-                    value={state.demand.baselineTPerYear}
-                    onChange={(e) => setState((s) => ({ ...s, demand: { ...s.demand, baselineTPerYear: e.target.value } }))}
-                    placeholder="e.g. 5000"
-                  />
-                </label>
-                <label className="mt-4 block">
-                  <span className={labelClass}>Scenario band</span>
-                  <select
-                    className={inputClass}
-                    value={state.demand.scenario}
-                    onChange={(e) => setState((s) => ({ ...s, demand: { ...s.demand, scenario: e.target.value } }))}
+                <legend className="px-1 text-sm font-semibold text-zinc-800">Calculator inputs</legend>
+
+                <p className="mt-2 text-xs text-zinc-600">
+                  Inputs shown here are driven by your Step 00 user type. Results update only when you click{" "}
+                  <span className="font-semibold">Run calculator</span>.
+                </p>
+
+                {state.demandModel.user_type === "offtake_cluster" && (
+                  <>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-3">
+                      <label className="block sm:col-span-2">
+                        <span className={labelClass}>Annual natural gas consumption</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.annual_natural_gas_consumption)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                annual_natural_gas_consumption: parseOptionalFloat(e.target.value),
+                              } as DemandModelInput,
+                            }))
+                          }
+                          placeholder="e.g. 120000"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className={labelClass}>Unit</span>
+                        <select
+                          className={inputClass}
+                          value={state.demandModel.annual_natural_gas_consumption_unit ?? "MWh"}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                annual_natural_gas_consumption_unit: e.target.value as any,
+                              } as DemandModelInput,
+                            }))
+                          }
+                        >
+                          <option value="m3">m³</option>
+                          <option value="kWh">kWh</option>
+                          <option value="MWh">MWh</option>
+                          <option value="GWh">GWh</option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <label className="mt-4 block">
+                      <span className={labelClass}>Replacement percentage (0–1)</span>
+                      <input
+                        className={inputClass}
+                        inputMode="decimal"
+                        value={finiteNumberFieldValue(state.demandModel.replacement_percentage)}
+                        onChange={(e) =>
+                          setState((s) => ({
+                            ...s,
+                            demandModel: {
+                              ...s.demandModel,
+                              replacement_percentage: parseOptionalFloat(e.target.value),
+                            } as DemandModelInput,
+                          }))
+                        }
+                        placeholder="e.g. 0.3"
+                      />
+                    </label>
+
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      <label className="block">
+                        <span className={labelClass}>Period start (year)</span>
+                        <input
+                          className={inputClass}
+                          inputMode="numeric"
+                          value={finiteNumberFieldValue(state.demandModel.global.period_start)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                global: {
+                                  ...s.demandModel.global,
+                                  period_start: parseOptionalInt(e.target.value),
+                                },
+                              } as DemandModelInput,
+                            }))
+                          }
+                          placeholder="e.g. 2026"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className={labelClass}>Period end (year)</span>
+                        <input
+                          className={inputClass}
+                          inputMode="numeric"
+                          value={finiteNumberFieldValue(state.demandModel.global.period_end)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                global: {
+                                  ...s.demandModel.global,
+                                  period_end: parseOptionalInt(e.target.value),
+                                },
+                              } as DemandModelInput,
+                            }))
+                          }
+                          placeholder="e.g. 2030"
+                        />
+                      </label>
+                      <label className="block sm:col-span-2">
+                        <span className={labelClass}>CO₂ price scenario</span>
+                        <select
+                          className={inputClass}
+                          value={state.demandModel.global.co2_price_scenario ?? "Medium"}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                global: { ...s.demandModel.global, co2_price_scenario: e.target.value as any },
+                              } as DemandModelInput,
+                            }))
+                          }
+                        >
+                          <option value="Low">Low</option>
+                          <option value="Medium">Medium</option>
+                          <option value="High">High</option>
+                          <option value="All">All</option>
+                        </select>
+                      </label>
+                    </div>
+                  </>
+                )}
+
+                {state.demandModel.user_type === "production_hub" && (
+                  <>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      <label className="block">
+                        <span className={labelClass}>Hydrogen type</span>
+                        <select
+                          className={inputClass}
+                          value={state.demandModel.global.hydrogen_type ?? "Green"}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                global: { ...s.demandModel.global, hydrogen_type: e.target.value as "Blue" | "Green" },
+                              } as DemandModelInput,
+                            }))
+                          }
+                        >
+                          <option value="Green">Green</option>
+                          <option value="Blue">Blue</option>
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className={labelClass}>Tag year (optional)</span>
+                        <input
+                          className={inputClass}
+                          inputMode="numeric"
+                          value={finiteNumberFieldValue(state.demandModel.global.period_start)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                global: {
+                                  ...s.demandModel.global,
+                                  period_start: parseOptionalInt(e.target.value),
+                                },
+                              } as DemandModelInput,
+                            }))
+                          }
+                          placeholder={String(new Date().getFullYear())}
+                        />
+                      </label>
+                      <label className="block sm:col-span-2">
+                        <span className={labelClass}>
+                          Grid electricity (EUR/MWh) — optional; adds variable €/kg for Green when set
+                        </span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.annual_electricity_price_eur_per_MWh)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                annual_electricity_price_eur_per_MWh: parseOptionalFloat(e.target.value),
+                              } as DemandModelInput,
+                            }))
+                          }
+                          placeholder="e.g. 85"
+                        />
+                      </label>
+                    </div>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      <label className="block">
+                        <span className={labelClass}>Electrolyzer capacity (MW)</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.electrolyzer_capacity_MW)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                electrolyzer_capacity_MW: parseOptionalFloat(e.target.value),
+                              } as DemandModelInput,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="block">
+                        <span className={labelClass}>Reformer capacity (MW)</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.reformer_capacity_MW)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                reformer_capacity_MW: parseOptionalFloat(e.target.value),
+                              } as DemandModelInput,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="block">
+                        <span className={labelClass}>Capacity factor (0–1)</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.capacity_factor)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: { ...s.demandModel, capacity_factor: parseOptionalFloat(e.target.value) } as DemandModelInput,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="block">
+                        <span className={labelClass}>Efficiency (kWh/kg)</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.efficiency_kWh_per_kg)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                efficiency_kWh_per_kg: parseOptionalFloat(e.target.value),
+                              } as DemandModelInput,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="block">
+                        <span className={labelClass}>Annualized capex (EUR/year)</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.capex)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: { ...s.demandModel, capex: parseOptionalFloat(e.target.value) } as DemandModelInput,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="block">
+                        <span className={labelClass}>Annual opex (EUR/year)</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.opex)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: { ...s.demandModel, opex: parseOptionalFloat(e.target.value) } as DemandModelInput,
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+                  </>
+                )}
+
+                {state.demandModel.user_type === "distribution_logistics" && (
+                  <>
+                    <label className="mt-4 block">
+                      <span className={labelClass}>Hydrogen volume input method</span>
+                      <select
+                        className={inputClass}
+                        value={state.demandModel.hydrogen_volume_input_method ?? "from_demand"}
+                        onChange={(e) =>
+                          setState((s) => ({
+                            ...s,
+                            demandModel: { ...s.demandModel, hydrogen_volume_input_method: e.target.value as any } as DemandModelInput,
+                          }))
+                        }
+                      >
+                        <option value="from_production">From production</option>
+                        <option value="from_demand">From demand</option>
+                      </select>
+                    </label>
+                    {state.demandModel.hydrogen_volume_input_method === "from_production" && (
+                      <p className="mt-2 text-xs text-zinc-600">
+                        {(() => {
+                          const pr = state.demandResults;
+                          const kg =
+                            pr?.user_type === "production_hub" &&
+                            typeof pr.summary_metrics?.annual_hydrogen_production_kg === "number"
+                              ? (pr.summary_metrics.annual_hydrogen_production_kg as number)
+                              : NaN;
+                          if (Number.isFinite(kg) && kg > 0) {
+                            return (
+                              <>
+                                Linked to last <span className="font-semibold">Production hub</span> run:{" "}
+                                {formatNumber(kg, { maximumFractionDigits: 0 })} kg/yr (applied when you Run).
+                              </>
+                            );
+                          }
+                          return "Run Production hub in this step first and keep its results, then Run distribution.";
+                        })()}
+                      </p>
+                    )}
+                    <label className="mt-4 block">
+                      <span className={labelClass}>Tag year (optional)</span>
+                      <input
+                        className={inputClass}
+                        inputMode="numeric"
+                        value={finiteNumberFieldValue(state.demandModel.global.period_start)}
+                        onChange={(e) =>
+                          setState((s) => ({
+                            ...s,
+                            demandModel: {
+                              ...s.demandModel,
+                              global: {
+                                ...s.demandModel.global,
+                                period_start: parseOptionalInt(e.target.value),
+                              },
+                            } as DemandModelInput,
+                          }))
+                        }
+                        placeholder={String(new Date().getFullYear())}
+                      />
+                    </label>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      <label className="block">
+                        <span className={labelClass}>
+                          {state.demandModel.hydrogen_volume_input_method === "from_production"
+                            ? "Hydrogen mass (kg, from production)"
+                            : "Hydrogen input (kg)"}
+                        </span>
+                        <input
+                          className={`${inputClass} disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-500`}
+                          inputMode="decimal"
+                          disabled={state.demandModel.hydrogen_volume_input_method === "from_production"}
+                          value={
+                            state.demandModel.hydrogen_volume_input_method === "from_production"
+                              ? (() => {
+                                  const pr = state.demandResults;
+                                  const kg =
+                                    pr?.user_type === "production_hub" &&
+                                    typeof pr.summary_metrics?.annual_hydrogen_production_kg === "number"
+                                      ? (pr.summary_metrics.annual_hydrogen_production_kg as number)
+                                      : NaN;
+                                  return Number.isFinite(kg) && kg > 0 ? kg : "";
+                                })()
+                              : finiteNumberFieldValue(state.demandModel.hydrogen_input_value_kg)
+                          }
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                hydrogen_input_value_kg: parseOptionalFloat(e.target.value),
+                              } as DemandModelInput,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="block">
+                        <span className={labelClass}>Distance (km)</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.transport_distance_km)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                transport_distance_km: parseOptionalFloat(e.target.value),
+                              } as DemandModelInput,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="block">
+                        <span className={labelClass}>Transport mode</span>
+                        <select
+                          className={inputClass}
+                          value={state.demandModel.transport_mode ?? "truck"}
+                          onChange={(e) =>
+                            setState((s) => ({ ...s, demandModel: { ...s.demandModel, transport_mode: e.target.value as any } as DemandModelInput }))
+                          }
+                        >
+                          <option value="truck">Truck</option>
+                          <option value="pipeline">Pipeline</option>
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className={labelClass}>Cost per km per kg</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.cost_per_km_per_kg)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                cost_per_km_per_kg: parseOptionalFloat(e.target.value),
+                              } as DemandModelInput,
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+                  </>
+                )}
+
+                {state.demandModel.user_type === "transport_corridor" && (
+                  <>
+                    <label className="mt-4 block">
+                      <span className={labelClass}>Tag year (optional)</span>
+                      <input
+                        className={inputClass}
+                        inputMode="numeric"
+                        value={finiteNumberFieldValue(state.demandModel.global.period_start)}
+                        onChange={(e) =>
+                          setState((s) => ({
+                            ...s,
+                            demandModel: {
+                              ...s.demandModel,
+                              global: {
+                                ...s.demandModel.global,
+                                period_start: parseOptionalInt(e.target.value),
+                              },
+                            } as DemandModelInput,
+                          }))
+                        }
+                        placeholder={String(new Date().getFullYear())}
+                      />
+                    </label>
+                    <label className="mt-4 block">
+                      <span className={labelClass}>Node demands (kg, comma-separated)</span>
+                      <input
+                        className={inputClass}
+                        value={(state.demandModel.node_demands_kg ?? []).join(", ")}
+                        onChange={(e) =>
+                          setState((s) => ({
+                            ...s,
+                            demandModel: {
+                              ...s.demandModel,
+                              node_demands_kg: e.target.value
+                                .split(",")
+                                .map((x) => parseFloat(x.trim()))
+                                .filter((x) => Number.isFinite(x)),
+                            } as DemandModelInput,
+                          }))
+                        }
+                        placeholder="e.g. 5000, 12000, 8000"
+                      />
+                    </label>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      <label className="block">
+                        <span className={labelClass}>Avg distance between nodes</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.average_distance_between_nodes)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                average_distance_between_nodes: parseOptionalFloat(e.target.value),
+                              } as DemandModelInput,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="block">
+                        <span className={labelClass}>Cost per km per kg</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.cost_per_km_per_kg)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                cost_per_km_per_kg: parseOptionalFloat(e.target.value),
+                              } as DemandModelInput,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="block sm:col-span-2">
+                        <span className={labelClass}>Loss factor (0–0.49, optional)</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.loss_factor)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                loss_factor: parseOptionalFloat(e.target.value),
+                              } as DemandModelInput,
+                            }))
+                          }
+                          placeholder="0"
+                        />
+                        <span className="mt-1 block text-[11px] text-zinc-500">
+                          Share lost in transit; cost uses kg moved = delivered ÷ (1 − loss).
+                        </span>
+                      </label>
+                    </div>
+                  </>
+                )}
+
+                {demandIssues.length > 0 && (
+                  <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
+                    <p className="font-semibold">Missing / invalid inputs</p>
+                    <ul className="mt-2 list-disc space-y-1 pl-5">
+                      {demandIssues.map((i, idx) => (
+                        <li key={idx}>
+                          <span className="font-medium">{i.field}</span>: {i.message}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                <div className="mt-5 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDemandIssues([]);
+                      const modelToRun = buildDemandModelForRun(state);
+                      if (
+                        state.demandModel.user_type === "distribution_logistics" &&
+                        state.demandModel.hydrogen_volume_input_method === "from_production"
+                      ) {
+                        const pr = state.demandResults;
+                        const kg =
+                          pr?.user_type === "production_hub" &&
+                          typeof pr.summary_metrics?.annual_hydrogen_production_kg === "number"
+                            ? (pr.summary_metrics.annual_hydrogen_production_kg as number)
+                            : NaN;
+                        if (!Number.isFinite(kg) || kg <= 0) {
+                          setDemandIssues([
+                            {
+                              field: "from_production",
+                              message:
+                                "Run Production hub in this session first (keep results), or switch to From demand and enter kg.",
+                            },
+                          ]);
+                          return;
+                        }
+                      }
+                      const issues = validateDemandModel(modelToRun);
+                      setDemandIssues(issues);
+                      if (issues.length > 0) return;
+                      const result = computeDemandModel(modelToRun);
+                      setState((s) => ({ ...s, demandResults: result }));
+                    }}
+                    className="rounded-lg bg-[#f97316] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-orange-600"
                   >
-                    <option value="low">Low</option>
-                    <option value="mid">Mid</option>
-                    <option value="high">High</option>
-                  </select>
-                </label>
-                <label className="mt-4 block">
-                  <span className={labelClass}>Primary sector</span>
-                  <select
-                    className={inputClass}
-                    value={state.demand.sector}
-                    onChange={(e) => setState((s) => ({ ...s, demand: { ...s.demand, sector: e.target.value } }))}
+                    Run calculator
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDemandIssues([]);
+                      setState((s) => ({ ...s, demandResults: null }));
+                    }}
+                    className="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-800 hover:bg-zinc-50"
                   >
-                    <option value="">Select…</option>
-                    <option value="mobility">Mobility</option>
-                    <option value="industry">Industry / refining</option>
-                    <option value="power">Power / balancing</option>
-                    <option value="blend">Grid injection / blend</option>
-                    <option value="export">Export / hub</option>
-                    <option value="other">Other</option>
-                  </select>
-                </label>
+                    Clear results
+                  </button>
+                </div>
               </fieldset>
-              <fieldset className="rounded-xl border border-orange-200 bg-orange-50/40 p-5">
-                <legend className="px-1 text-sm font-semibold text-amber-900">Assumptions & sensitivity</legend>
-                <label className="mt-2 block">
-                  <span className={labelClass}>Assumptions log</span>
-                  <textarea
-                    className={`${inputClass} min-h-[160px] resize-y`}
-                    value={state.demand.assumptions}
-                    onChange={(e) =>
-                      setState((s) => ({ ...s, demand: { ...s.demand, assumptions: e.target.value } }))
-                    }
-                    placeholder="Load factors, substitution rates, import parity, policy instruments…"
-                  />
-                </label>
+
+              <fieldset className="rounded-xl border border-orange-200/90 bg-gradient-to-b from-orange-50/60 via-amber-50/25 to-white p-5 shadow-sm">
+                <legend className="px-1 text-sm font-semibold text-amber-950">Outputs</legend>
+                {state.demandResults ? (
+                  <div className="mt-2 space-y-5">
+                    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-orange-200/70 pb-4">
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-wider text-orange-800/90">Latest run</p>
+                        <p className="mt-0.5 text-base font-semibold text-zinc-900">
+                          {formatUserTypeLabel(state.demandResults.user_type)}
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded-full bg-orange-500/15 px-3 py-1 text-xs font-semibold text-orange-950 ring-1 ring-orange-300/40">
+                        Desk calculator
+                      </span>
+                    </div>
+
+                    {state.demandResults.user_type === "offtake_cluster" && (
+                      <>
+                        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                          <DemandKpiCard
+                            label="Gas consumption"
+                            value={`${formatNumber((state.demandResults.summary_metrics as any).natural_gas_volume_MWh, {
+                              maximumFractionDigits: 0,
+                            })} MWh`}
+                            hint="Annual volume, converted to MWh"
+                            emphasis="lead"
+                          />
+                          <DemandKpiCard
+                            label="Replaceable gas"
+                            value={`${formatNumber((state.demandResults.summary_metrics as any).replaceable_volume_MWh, {
+                              maximumFractionDigits: 0,
+                            })} MWh`}
+                            hint="After replacement %"
+                          />
+                          <DemandKpiCard
+                            label="Avoided CO₂"
+                            value={`${formatNumber((state.demandResults.summary_metrics as any).avoided_co2_ton, {
+                              maximumFractionDigits: 1,
+                            })} t/yr`}
+                          />
+                          <DemandKpiCard
+                            label="H₂ substitution"
+                            value={`${formatNumber((state.demandResults.summary_metrics as any).hydrogen_ton_per_year, {
+                              maximumFractionDigits: 1,
+                            })} t/yr`}
+                            hint="Desk link from replaceable MWh"
+                          />
+                        </div>
+
+                        <div>
+                          <p className="mb-2 text-xs font-semibold text-zinc-700">Year × CO₂ price scenario</p>
+                          <div className="overflow-hidden rounded-xl border border-zinc-200/90 bg-white shadow-sm">
+                            <div className="max-h-[min(420px,55vh)] overflow-auto">
+                              <table className="min-w-[600px] w-full text-left text-sm">
+                                <thead className="sticky top-0 z-10 border-b border-zinc-200 bg-gradient-to-b from-zinc-50 to-zinc-100/90 shadow-[0_1px_0_0_rgb(228_228_231)]">
+                                  <tr>
+                                    <th className="whitespace-nowrap px-4 py-3 text-xs font-semibold uppercase tracking-wide text-zinc-600">
+                                      Year
+                                    </th>
+                                    <th className="whitespace-nowrap px-4 py-3 text-xs font-semibold uppercase tracking-wide text-zinc-600">
+                                      Scenario
+                                    </th>
+                                    <th className="whitespace-nowrap px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-zinc-600">
+                                      H₂ (t)
+                                    </th>
+                                    <th className="whitespace-nowrap px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-zinc-600">
+                                      CO₂ savings / yr
+                                    </th>
+                                    <th className="whitespace-nowrap px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-zinc-600">
+                                      Cumulative
+                                    </th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-zinc-100">
+                                  {state.demandResults.yearly_results.map((row, idx) => {
+                                    const scenario = (row.scenario as string | undefined) ?? "—";
+                                    return (
+                                      <tr
+                                        key={idx}
+                                        className="bg-white transition-colors hover:bg-orange-50/40 even:bg-zinc-50/50"
+                                      >
+                                        <td className="whitespace-nowrap px-4 py-2.5 font-medium tabular-nums text-zinc-900">
+                                          {row.year as any}
+                                        </td>
+                                        <td className="px-4 py-2.5">
+                                          <span
+                                            className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${demandScenarioBadgeClass(scenario)}`}
+                                          >
+                                            {scenario}
+                                          </span>
+                                        </td>
+                                        <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-zinc-800">
+                                          {formatNumber((row.hydrogen_ton as any) ?? undefined, { maximumFractionDigits: 1 })}
+                                        </td>
+                                        <td className="whitespace-nowrap px-4 py-2.5 text-right font-medium tabular-nums text-zinc-900">
+                                          {formatCurrencyEUR((row.co2_cost_savings_eur as any) ?? undefined)}
+                                        </td>
+                                        <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-zinc-700">
+                                          {formatCurrencyEUR((row.cumulative_co2_cost_savings_eur as any) ?? undefined)}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    {state.demandResults.user_type === "production_hub" && (
+                      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                        <DemandKpiCard
+                          label="Annual H₂ production"
+                          value={`${formatNumber((state.demandResults.summary_metrics as any).annual_hydrogen_production_kg, {
+                            maximumFractionDigits: 0,
+                          })} kg`}
+                          hint="From capacity, CF, and efficiency"
+                          emphasis="lead"
+                        />
+                        <DemandKpiCard
+                          label="Levelized cost"
+                          value={`${formatNumber((state.demandResults.summary_metrics as any).hydrogen_cost_per_kg, {
+                            maximumFractionDigits: 3,
+                          })} €/kg`}
+                          hint="Fixed + variable (Green)"
+                        />
+                        <DemandKpiCard
+                          label="Fixed cost"
+                          value={`${formatNumber((state.demandResults.summary_metrics as any).fixed_cost_eur_per_kg, {
+                            maximumFractionDigits: 3,
+                          })} €/kg`}
+                          hint="Annualized capex + opex"
+                        />
+                        <DemandKpiCard
+                          label="Variable cost"
+                          value={`${formatNumber((state.demandResults.summary_metrics as any).variable_cost_eur_per_kg, {
+                            maximumFractionDigits: 3,
+                          })} €/kg`}
+                          hint="Grid power (if set)"
+                        />
+                      </div>
+                    )}
+
+                    {state.demandResults.user_type === "distribution_logistics" && (
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <DemandKpiCard
+                          label="Mass moved"
+                          value={`${formatNumber((state.demandResults.summary_metrics as any).transported_hydrogen_kg, {
+                            maximumFractionDigits: 0,
+                          })} kg`}
+                          hint="Per run basis"
+                          emphasis="lead"
+                        />
+                        <DemandKpiCard
+                          label="Transport cost"
+                          value={formatCurrencyEUR((state.demandResults.summary_metrics as any).transport_cost)}
+                          hint="kg × km × €/km/kg"
+                        />
+                      </div>
+                    )}
+
+                    {state.demandResults.user_type === "transport_corridor" && (
+                      <div className="grid gap-3 sm:grid-cols-1 md:grid-cols-3">
+                        <DemandKpiCard
+                          label="Delivered demand"
+                          value={`${formatNumber(
+                            (state.demandResults.summary_metrics as any).total_hydrogen_demand_kg ??
+                              (state.demandResults.summary_metrics as any).total_hydrogen_demand,
+                            { maximumFractionDigits: 0 },
+                          )} kg`}
+                          hint="Sum of node demands"
+                          emphasis="lead"
+                        />
+                        <DemandKpiCard
+                          label="Shipped mass (incl. loss)"
+                          value={`${formatNumber((state.demandResults.summary_metrics as any).transport_basis_kg, {
+                            maximumFractionDigits: 0,
+                          })} kg`}
+                          hint="Delivered ÷ (1 − loss)"
+                        />
+                        <DemandKpiCard
+                          label="Network transport cost"
+                          value={formatCurrencyEUR((state.demandResults.summary_metrics as any).total_network_transport_cost)}
+                          hint="Shipped kg × avg km × €/km/kg"
+                        />
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="mt-4 flex flex-col items-center justify-center rounded-xl border border-dashed border-orange-300/70 bg-orange-50/25 py-14 px-6 text-center">
+                    <p className="text-sm font-semibold text-amber-950">No results yet</p>
+                    <p className="mt-2 max-w-sm text-xs leading-relaxed text-amber-900/85">
+                      Fill in the calculator on the left, then click <span className="font-semibold text-amber-950">Run calculator</span>{" "}
+                      to populate this panel.
+                    </p>
+                  </div>
+                )}
               </fieldset>
             </div>
           )}
