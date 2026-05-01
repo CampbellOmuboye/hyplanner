@@ -27,6 +27,13 @@ import type {
   UserType,
   ValidationIssue,
 } from "@/lib/h2-calculator/types";
+import {
+  calculateDiscountedPaybackPeriod,
+  calculatePaybackPeriod,
+  irr,
+  npv,
+  type CashFlow,
+} from "@/step4/businessCaseEngine";
 import { WorkflowStepIcon } from "./WorkflowStepIcon";
 import { HydrogenOpportunityMap } from "./opportunity-map/HydrogenOpportunityMap";
 
@@ -101,6 +108,15 @@ export type PlannerState = {
   demandModel: DemandModelInput;
   demandResults: DemandModelResult | null;
   assessment: { technical: string; regulatory: string; commercial: string; offtake: string; notes: string };
+  businessCase: {
+    project_years: number;
+    discount_rate: number;
+    capex_eur: number;
+    revenue_eur_per_year: number;
+    opex_eur_per_year: number;
+    revenue_linked_to_step3: boolean;
+    hydrogen_price_eur_per_kg: number;
+  };
   workplan: { tasks: WorkplanTask[] };
   capacity: {
     hydrogenSafety: boolean;
@@ -163,6 +179,31 @@ function formatCurrencyEUR(n: unknown): string {
   const x = typeof n === "number" ? n : Number(n);
   if (!Number.isFinite(x)) return "—";
   return new Intl.NumberFormat(undefined, { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(x);
+}
+
+function formatPercent(n: unknown, opts?: { maximumFractionDigits?: number }): string {
+  const x = typeof n === "number" ? n : Number(n);
+  if (!Number.isFinite(x)) return "—";
+  return new Intl.NumberFormat(undefined, {
+    style: "percent",
+    maximumFractionDigits: opts?.maximumFractionDigits ?? 1,
+  }).format(x);
+}
+
+function getHydrogenKgPerYearFromDemandResults(r: DemandModelResult | null): number | null {
+  if (!r) return null;
+  const sm: any = r.summary_metrics ?? {};
+  const candidates: unknown[] = [
+    sm.annual_hydrogen_production_kg,
+    sm.total_hydrogen_demand_kg,
+    sm.transported_hydrogen_kg,
+    sm.hydrogen_kg,
+  ];
+  for (const v of candidates) {
+    const n = typeof v === "number" ? v : Number(v);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
 }
 
 /** Empty or non-numeric input → undefined (never NaN — keeps controlled inputs stable). */
@@ -310,6 +351,15 @@ function createInitialState(): PlannerState {
     demandModel: defaultDemandModel("production_hub"),
     demandResults: null,
     assessment: { technical: "", regulatory: "", commercial: "", offtake: "", notes: "" },
+    businessCase: {
+      project_years: 15,
+      discount_rate: 0.08,
+      capex_eur: 0,
+      revenue_eur_per_year: 0,
+      opex_eur_per_year: 0,
+      revenue_linked_to_step3: true,
+      hydrogen_price_eur_per_kg: 0,
+    },
     workplan: { tasks: [] },
     capacity: { hydrogenSafety: false, markets: false, operations: false, standards: false, targetQuarter: "" },
     expert: { objectives: "", questions: "", contact: "email" },
@@ -344,6 +394,7 @@ function normalizePlannerState(raw: PlannerState): PlannerState {
     problem: { ...base.problem, ...(raw.problem ?? base.problem) },
     demand: { ...base.demand, ...(raw.demand ?? base.demand) },
     assessment: { ...base.assessment, ...(raw.assessment ?? base.assessment) },
+    businessCase: { ...base.businessCase, ...((raw as any).businessCase ?? base.businessCase) },
     capacity: { ...base.capacity, ...(raw.capacity ?? base.capacity) },
     expert: { ...base.expert, ...(raw.expert ?? base.expert) },
     feedback: { ...base.feedback, ...(raw.feedback ?? base.feedback) },
@@ -2726,6 +2777,225 @@ export function HydrogenPlanner() {
                   ))}
                 </div>
               )}
+
+              <div className="grid gap-6 lg:grid-cols-2">
+                <fieldset className="rounded-xl border border-zinc-200 bg-zinc-50/80 p-5">
+                  <legend className="px-1 text-sm font-semibold text-zinc-800">Business case inputs</legend>
+                  <p className="mt-2 text-xs text-zinc-600">Minimal desk model: Year 0 capex, then flat revenue &amp; opex.</p>
+
+                  <label className="mt-4 flex cursor-pointer items-start gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 size-4 rounded border-zinc-300 text-orange-600"
+                      checked={state.businessCase.revenue_linked_to_step3}
+                      onChange={(e) =>
+                        setState((s) => ({
+                          ...s,
+                          businessCase: { ...s.businessCase, revenue_linked_to_step3: e.target.checked },
+                        }))
+                      }
+                    />
+                    <span className="leading-snug">
+                      <span className="font-semibold text-zinc-900">Link revenue</span>{" "}
+                      <span className="text-zinc-600">from Step 3 results (kg/yr × price)</span>
+                    </span>
+                  </label>
+
+                  {state.businessCase.revenue_linked_to_step3 && (
+                    <div className="mt-3 rounded-xl border border-orange-200 bg-orange-50/50 px-4 py-3 text-xs text-amber-950">
+                      {(() => {
+                        const kg = getHydrogenKgPerYearFromDemandResults(state.demandResults);
+                        if (!kg) {
+                          return (
+                            <p className="leading-relaxed">
+                              No Step 3 results to link yet. Run the Step 3 calculator first, or uncheck linking to enter revenue manually.
+                            </p>
+                          );
+                        }
+                        return (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-semibold">Source:</span>
+                            <span>{state.demandResults ? formatUserTypeLabel(state.demandResults.user_type) : "—"}</span>
+                            <span className="text-zinc-400">•</span>
+                            <span className="font-semibold">Hydrogen:</span>
+                            <span className="tabular-nums">{formatNumber(kg, { maximumFractionDigits: 0 })} kg/yr</span>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <label className="block">
+                      <span className={labelClass}>Project years</span>
+                      <input
+                        className={inputClass}
+                        inputMode="numeric"
+                        value={finiteNumberFieldValue(state.businessCase.project_years)}
+                        onChange={(e) => {
+                          const n = parseOptionalInt(e.target.value);
+                          setState((s) => ({
+                            ...s,
+                            businessCase: { ...s.businessCase, project_years: Math.max(0, Math.floor(n ?? 0)) },
+                          }));
+                        }}
+                        placeholder="e.g. 15"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className={labelClass}>Discount rate (decimal)</span>
+                      <input
+                        className={inputClass}
+                        inputMode="decimal"
+                        value={finiteNumberFieldValue(state.businessCase.discount_rate)}
+                        onChange={(e) => {
+                          const n = parseOptionalFloat(e.target.value);
+                          setState((s) => ({ ...s, businessCase: { ...s.businessCase, discount_rate: n ?? 0 } }));
+                        }}
+                        placeholder="e.g. 0.08"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className={labelClass}>Capex (EUR, Year 0)</span>
+                      <input
+                        className={inputClass}
+                        inputMode="decimal"
+                        value={finiteNumberFieldValue(state.businessCase.capex_eur)}
+                        onChange={(e) => {
+                          const n = parseOptionalFloat(e.target.value);
+                          setState((s) => ({ ...s, businessCase: { ...s.businessCase, capex_eur: n ?? 0 } }));
+                        }}
+                        placeholder="e.g. 20000000"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className={labelClass}>Revenue (EUR/year)</span>
+                      <input
+                        className={`${inputClass} disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-500`}
+                        inputMode="decimal"
+                        value={finiteNumberFieldValue(state.businessCase.revenue_eur_per_year)}
+                        disabled={state.businessCase.revenue_linked_to_step3}
+                        onChange={(e) => {
+                          const n = parseOptionalFloat(e.target.value);
+                          setState((s) => ({ ...s, businessCase: { ...s.businessCase, revenue_eur_per_year: n ?? 0 } }));
+                        }}
+                        placeholder="e.g. 6000000"
+                      />
+                      {state.businessCase.revenue_linked_to_step3 && (
+                        <span className="mt-1 block text-[11px] text-zinc-500">
+                          Revenue is derived from hydrogen kg/yr × price (set below).
+                        </span>
+                      )}
+                    </label>
+                    <label className="block sm:col-span-2">
+                      <span className={labelClass}>Opex (EUR/year)</span>
+                      <input
+                        className={inputClass}
+                        inputMode="decimal"
+                        value={finiteNumberFieldValue(state.businessCase.opex_eur_per_year)}
+                        onChange={(e) => {
+                          const n = parseOptionalFloat(e.target.value);
+                          setState((s) => ({ ...s, businessCase: { ...s.businessCase, opex_eur_per_year: n ?? 0 } }));
+                        }}
+                        placeholder="e.g. 2500000"
+                      />
+                    </label>
+                    <label className="block sm:col-span-2">
+                      <span className={labelClass}>Hydrogen sales price (EUR/kg)</span>
+                      <input
+                        className={`${inputClass} disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-500`}
+                        inputMode="decimal"
+                        value={finiteNumberFieldValue(state.businessCase.hydrogen_price_eur_per_kg)}
+                        disabled={!state.businessCase.revenue_linked_to_step3}
+                        onChange={(e) => {
+                          const n = parseOptionalFloat(e.target.value);
+                          setState((s) => ({ ...s, businessCase: { ...s.businessCase, hydrogen_price_eur_per_kg: n ?? 0 } }));
+                        }}
+                        placeholder="e.g. 6.5"
+                      />
+                      {!state.businessCase.revenue_linked_to_step3 && (
+                        <span className="mt-1 block text-[11px] text-zinc-500">
+                          Enable linking to use hydrogen price in revenue calculation.
+                        </span>
+                      )}
+                    </label>
+                  </div>
+                </fieldset>
+
+                <fieldset className="rounded-xl border border-orange-200/90 bg-gradient-to-b from-orange-50/60 via-amber-50/25 to-white p-5 shadow-sm">
+                  <legend className="px-1 text-sm font-semibold text-amber-950">Business case outputs</legend>
+                  {(() => {
+                    const bc = state.businessCase;
+                    const years = Math.max(0, Math.floor(bc.project_years || 0));
+                    const linkedKg = getHydrogenKgPerYearFromDemandResults(state.demandResults);
+                    const derivedRevenue =
+                      bc.revenue_linked_to_step3 && linkedKg
+                        ? linkedKg * (bc.hydrogen_price_eur_per_kg ?? 0)
+                        : bc.revenue_eur_per_year ?? 0;
+                    const revenueUsed = bc.revenue_linked_to_step3 ? derivedRevenue : bc.revenue_eur_per_year ?? 0;
+                    const opexUsed = bc.opex_eur_per_year ?? 0;
+                    const annualNet = revenueUsed - opexUsed;
+                    const capex0 = Math.max(0, bc.capex_eur ?? 0);
+
+                    const safeDiscountRate = bc.discount_rate !== undefined && bc.discount_rate > -0.999 ? bc.discount_rate : 0;
+                    const cashflows: CashFlow[] = [{ net_cash_flow: -capex0 }];
+                    for (let y = 1; y <= years; y += 1) cashflows.push({ net_cash_flow: annualNet });
+
+                    const payback = calculatePaybackPeriod(cashflows);
+                    const discPayback = calculateDiscountedPaybackPeriod(cashflows, safeDiscountRate);
+                    const npvValue = npv(safeDiscountRate, cashflows.map((c) => c.net_cash_flow));
+                    const irrValue = irr(cashflows.map((c) => c.net_cash_flow));
+
+                    return (
+                      <div className="mt-3 space-y-3">
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <DemandKpiCard
+                            label="Annual net cashflow"
+                            value={formatCurrencyEUR(annualNet)}
+                            hint={bc.revenue_linked_to_step3 ? "Linked revenue − opex" : "Revenue − opex"}
+                            emphasis="lead"
+                          />
+                          <DemandKpiCard label="NPV" value={formatCurrencyEUR(npvValue)} hint="Discounted at the rate above" />
+                          <DemandKpiCard
+                            label="Payback"
+                            value={`${payback[0]}y ${payback[1]}m`}
+                            hint="Undiscounted (desk interpolation)"
+                          />
+                          <DemandKpiCard
+                            label="Discounted payback"
+                            value={`${discPayback[0]}y ${discPayback[1]}m`}
+                            hint="Discounted cashflows"
+                          />
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <DemandKpiCard label="IRR" value={formatPercent(irrValue, { maximumFractionDigits: 1 })} hint="Best-effort bisection" />
+                          <div className="rounded-xl border border-zinc-200/85 bg-white p-4 text-xs text-zinc-600">
+                            <p className="font-semibold text-zinc-800">Cashflow definition</p>
+                            <p className="mt-2 leading-relaxed">
+                              Year 0 = <span className="font-medium text-zinc-900">−capex</span>. Years 1..N ={" "}
+                              <span className="font-medium text-zinc-900">revenue − opex</span>.
+                            </p>
+                            {bc.revenue_linked_to_step3 && (
+                              <p className="mt-2 leading-relaxed">
+                                Linked revenue ={" "}
+                                <span className="font-medium text-zinc-900">
+                                  {formatNumber(linkedKg ?? undefined, { maximumFractionDigits: 0 })} kg/yr
+                                </span>{" "}
+                                ×{" "}
+                                <span className="font-medium text-zinc-900">
+                                  {formatNumber(bc.hydrogen_price_eur_per_kg ?? 0, { maximumFractionDigits: 3 })} €/kg
+                                </span>{" "}
+                                = <span className="font-medium text-zinc-900">{formatCurrencyEUR(derivedRevenue)}</span>
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </fieldset>
+              </div>
+
               <div className="grid gap-6 lg:grid-cols-2">
                 <fieldset className="rounded-xl border border-zinc-200 bg-zinc-50/80 p-5">
                   <legend className="px-1 text-sm font-semibold text-zinc-800">Gate scores</legend>
