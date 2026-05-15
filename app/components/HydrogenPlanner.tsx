@@ -38,6 +38,48 @@ import { WorkflowStepIcon } from "./WorkflowStepIcon";
 import { HydrogenOpportunityMap } from "./opportunity-map/HydrogenOpportunityMap";
 
 const STORAGE_KEY = "hyplanner.project.v1";
+const GUIDANCE_STORAGE_KEY = "hyplanner.showGuidance";
+
+const STEP_GUIDANCE: readonly (readonly string[])[] = [
+  [
+    "Project type sets User type and which hydrogen demand calculator module runs in step 03.",
+    "These fields capture a structured brief for your team—they are not legal or investment advice.",
+    "Completion percentages measure filled fields, not project quality or feasibility.",
+    "Drafts and named projects are stored in this browser until you clear site data or cloud sync is added.",
+  ],
+  [
+    "The opportunity map combines simplified, illustrative signals to compare areas—not a live GIS inventory.",
+    "Add location candidates, link regions where relevant, and write rationale you can defend in reviews.",
+    "Aim for a shortlist and clear notes before moving on; you can return to refine signals later.",
+  ],
+  [
+    "Use this as a lightweight stakeholder register for alignment conversations, not a full CRM.",
+    "Stance captures perceived support or risk so you can prioritise who to engage next.",
+    "Names and organisations are part of your saved project—handle personal data per your organisation’s policy.",
+  ],
+  [
+    "Offtake mode covers natural gas, grey hydrogen, diesel mobility, direct mobility hydrogen demand, and optional grid-balancing electrolysis.",
+    "Replacement goals can be entered as a decimal (0–1) or as a percent (0–100).",
+    "Figures are screening-quality only—not bankable engineering, offtake, or finance outputs.",
+  ],
+  [
+    "Narrative fields capture an early gate on technical, regulatory, commercial, and offtake themes.",
+    "Business case metrics (NPV, IRR, simple and discounted payback) use the simplified cash-flow logic in this tool.",
+    "Figures are not a substitute for detailed FEED, tax, or structured finance modelling.",
+  ],
+  [
+    "Checkboxes record planned capability topics, not formal certifications.",
+    "Pick a target quarter so training milestones line up with your Gantt and workplan.",
+  ],
+  [
+    "Summarise what you want from a reviewer or advisor and list concrete questions.",
+    "Contact details are stored with your project like other fields—share only what you intend to persist.",
+  ],
+  [
+    "Use this to signal roadmap interest and free-form comments for product direction.",
+    "Comments do not automatically open a support ticket unless you connect a process outside this app.",
+  ],
+] as const;
 
 type StakeholderRow = { id: string; name: string; org: string; role: string; stance: string };
 
@@ -199,6 +241,7 @@ function getHydrogenKgPerYearFromDemandResults(r: DemandModelResult | null): num
     sm.transported_hydrogen_kg,
     sm.hydrogen_kg,
   ];
+  // offtake_cluster sets total_hydrogen_demand_kg explicitly; keep order above so production hub wins when present.
   for (const v of candidates) {
     const n = typeof v === "number" ? v : Number(v);
     if (Number.isFinite(n) && n > 0) return n;
@@ -253,15 +296,15 @@ function DemandKpiCard({
 }) {
   return (
     <div
-      className={`rounded-xl border p-4 shadow-sm transition-[box-shadow,transform] duration-200 ${
+      className={`rounded-lg border p-3.5 shadow-sm transition-colors duration-200 md:p-4 ${
         emphasis === "lead"
-          ? "border-orange-300/90 bg-gradient-to-br from-orange-50/90 via-white to-white ring-1 ring-orange-200/60"
-          : "border-zinc-200/85 bg-white hover:-translate-y-0.5 hover:shadow-md hover:ring-1 hover:ring-orange-100/80"
+          ? "border-slate-300/90 bg-white ring-1 ring-slate-200/50"
+          : "border-zinc-200/90 bg-white hover:border-zinc-300"
       }`}
     >
-      <p className="text-[11px] font-semibold uppercase tracking-[0.07em] text-zinc-500">{label}</p>
-      <p className="mt-2 text-2xl font-semibold tabular-nums tracking-tight text-zinc-900">{value}</p>
-      {hint ? <p className="mt-2 text-xs leading-relaxed text-zinc-500">{hint}</p> : null}
+      <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-zinc-500">{label}</p>
+      <p className="mt-2 text-xl font-semibold tabular-nums tracking-tight text-zinc-900 md:text-2xl">{value}</p>
+      {hint ? <p className="mt-2 text-[11px] leading-snug text-zinc-500">{hint}</p> : null}
     </div>
   );
 }
@@ -270,7 +313,16 @@ function defaultDemandModel(u: UserType): DemandModelInput {
   const base = { global: {} };
   switch (u) {
     case "offtake_cluster":
-      return { user_type: u, ...base, annual_natural_gas_consumption_unit: "MWh", replacement_percentage: 0.3 };
+      return {
+        user_type: u,
+        ...base,
+        natural_gas_usage_nm3_per_year: 1_000_000,
+        annual_natural_gas_consumption: undefined,
+        annual_natural_gas_consumption_unit: "MWh",
+        replacement_percentage: 0.3,
+        grey_h2_replacement_percentage: 0.3,
+        mobility_replacement_percentage: 0.3,
+      };
     case "production_hub":
       return {
         user_type: u,
@@ -563,8 +615,38 @@ function computeProjectCompletion(s: PlannerState): { overall: number; perStep: 
 }
 
 const inputClass =
-  "mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none focus:border-sky-600 focus:ring-1 focus:ring-sky-600";
-const labelClass = "block text-xs font-medium uppercase tracking-wide text-zinc-600";
+  "mt-1.5 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 shadow-sm outline-none transition-[border-color,box-shadow] focus:border-slate-400 focus:ring-2 focus:ring-slate-200/80";
+const labelClass = "block text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-500";
+/** Primary form surfaces */
+const fieldsetSurfaceClass =
+  "rounded-xl border border-zinc-200/90 bg-white p-4 shadow-sm ring-1 ring-zinc-950/[0.02] md:p-5 md:px-6";
+/** Results / secondary column */
+const fieldsetResultsClass =
+  "rounded-xl border border-zinc-200/90 bg-zinc-50/30 p-4 shadow-sm ring-1 ring-zinc-950/[0.02] md:p-5 md:px-6";
+const guidanceAsideClass =
+  "mt-5 rounded-xl border border-zinc-200 bg-white px-4 py-4 text-sm leading-relaxed text-zinc-700 shadow-sm ring-1 ring-zinc-950/[0.025]";
+/** Left-accent callouts (neutral + brand) */
+const calloutNeutralClass =
+  "rounded-xl border border-zinc-200 border-l-[3px] border-l-slate-600 bg-zinc-50/70 px-4 py-3.5 text-sm leading-relaxed text-zinc-700 shadow-sm";
+const calloutBrandClass =
+  "rounded-xl border border-zinc-200 border-l-[3px] border-l-[#1e3a8a] bg-white px-4 py-3.5 text-sm leading-relaxed text-zinc-800 shadow-sm ring-1 ring-zinc-950/[0.02]";
+const streamSectionTitleClass =
+  "mt-6 border-t border-zinc-100 pt-5 text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500";
+const legendClass = "px-1 text-xs font-bold uppercase tracking-[0.12em] text-zinc-500";
+const workflowStatusOk =
+  "rounded-xl border border-emerald-200/80 bg-emerald-50/90 px-4 py-3 text-sm text-emerald-950/95 shadow-sm ring-1 ring-emerald-950/[0.04]";
+
+function InfoCircleIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="currentColor" className={className} aria-hidden>
+      <path
+        fillRule="evenodd"
+        d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-11.25a.75.75 0 00-1.5 0v.5a.75.75 0 001.5 0v-.5zM10 11a.75.75 0 00-.75.75v3.5a.75.75 0 001.5 0v-3.5A.75.75 0 0010 11z"
+        clipRule="evenodd"
+      />
+    </svg>
+  );
+}
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
@@ -590,6 +672,8 @@ export function HydrogenPlanner() {
   const [versionMeta, setVersionMeta] = useState<ProjectVersionMeta[]>([]);
   const [projectSaveStatus, setProjectSaveStatus] = useState<SaveStatus>("idle");
   const [projectLastSavedAt, setProjectLastSavedAt] = useState<Date | null>(null);
+  const [showGuidance, setShowGuidance] = useState(false);
+  const [guidanceHydrated, setGuidanceHydrated] = useState(false);
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -621,6 +705,26 @@ export function HydrogenPlanner() {
     });
     setDemandIssues([]);
   }, [userType]);
+
+  useEffect(() => {
+    try {
+      const v = window.localStorage.getItem(GUIDANCE_STORAGE_KEY);
+      if (v === "1") setShowGuidance(true);
+      else if (v === "0") setShowGuidance(false);
+    } catch {
+      /* ignore */
+    }
+    setGuidanceHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!guidanceHydrated) return;
+    try {
+      window.localStorage.setItem(GUIDANCE_STORAGE_KEY, showGuidance ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, [showGuidance, guidanceHydrated]);
 
   useEffect(() => {
     if (startNewProject) {
@@ -1127,9 +1231,9 @@ export function HydrogenPlanner() {
   };
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 lg:flex-row lg:items-start">
-      <div className="order-1 min-w-0 flex-1 rounded-xl border border-zinc-200 bg-white text-zinc-900 shadow-lg ring-1 ring-zinc-950/[0.04] lg:order-2">
-      <header className="flex flex-wrap items-center justify-between gap-3 rounded-t-xl bg-[#1e3a8a] px-6 py-4 text-white md:py-5">
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 lg:flex-row lg:items-start lg:gap-8">
+      <div className="order-1 min-w-0 flex-1 overflow-hidden rounded-2xl border border-zinc-200/80 bg-white text-zinc-900 shadow-[0_1px_3px_rgba(0,0,0,0.06),0_12px_40px_-12px_rgba(15,23,42,0.12)] ring-1 ring-zinc-950/[0.03] lg:order-2">
+      <header className="flex flex-wrap items-center justify-between gap-3 rounded-t-2xl bg-gradient-to-r from-[#172554] to-[#1e3a8a] px-5 py-4 text-white md:px-6 md:py-5">
         <h1 className="flex items-center gap-3">
           <span className="rounded-lg bg-white/95 p-1.5 shadow-sm ring-1 ring-white/30">
             <Image
@@ -1143,12 +1247,23 @@ export function HydrogenPlanner() {
           </span>
           <span className="sr-only">HyPlanner 1.0</span>
         </h1>
-        <Link
-          href={activeProjectId ? `/planner/gantt?projectId=${encodeURIComponent(activeProjectId)}${activeVersionId ? `&versionId=${encodeURIComponent(activeVersionId)}` : ""}` : "/planner/gantt"}
-          className="shrink-0 rounded-lg border border-white/40 bg-white/10 px-3 py-2 text-sm font-semibold text-white backdrop-blur-sm transition-colors hover:bg-white/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-        >
-          Gantt chart
-        </Link>
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => setShowGuidance((v) => !v)}
+            aria-pressed={showGuidance}
+            className="inline-flex items-center gap-2 rounded-lg border border-white/25 bg-white/[0.08] px-3 py-2 text-sm font-medium text-white backdrop-blur-sm transition-colors hover:bg-white/[0.14] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+          >
+            <InfoCircleIcon className="h-4 w-4 shrink-0 opacity-95" />
+            <span>{showGuidance ? "Hide guidance" : "Show guidance"}</span>
+          </button>
+          <Link
+            href={activeProjectId ? `/planner/gantt?projectId=${encodeURIComponent(activeProjectId)}${activeVersionId ? `&versionId=${encodeURIComponent(activeVersionId)}` : ""}` : "/planner/gantt"}
+            className="shrink-0 rounded-lg border border-white/40 bg-white/10 px-3 py-2 text-sm font-semibold text-white backdrop-blur-sm transition-colors hover:bg-white/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+          >
+            Gantt chart
+          </Link>
+        </div>
       </header>
 
       <div className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200 bg-white px-4 py-3 md:px-6">
@@ -1277,18 +1392,38 @@ export function HydrogenPlanner() {
       </nav>
 
       <div className="px-4 py-5 md:px-6 md:py-6">
-        <div className="flex flex-wrap items-baseline gap-2 gap-y-1">
-          <span className="font-mono text-sm text-zinc-400">{step.displayId}</span>
-          <h2 className="text-xl font-bold text-[#1e3a8a] md:text-2xl">{step.title}</h2>
+        <div className="flex flex-wrap items-baseline gap-2 gap-y-1 border-b border-zinc-100 pb-4">
+          <span className="font-mono text-xs font-medium text-zinc-400">{step.displayId}</span>
+          <h2 className="text-xl font-semibold tracking-tight text-zinc-900 md:text-2xl">{step.title}</h2>
         </div>
         {step.tool && (
-          <p className={`mt-1 font-mono text-xs ${step.accentTool ? "text-orange-600" : "text-sky-700"}`}>{step.tool}</p>
+          <p className={`mt-3 text-[11px] font-semibold uppercase tracking-[0.12em] ${step.accentTool ? "text-orange-700" : "text-slate-600"}`}>
+            {step.tool}
+          </p>
         )}
-        <p className="mt-2 text-sm text-zinc-600 md:text-base">{step.shortDescription}</p>
+        <p className="mt-2 max-w-3xl text-sm leading-relaxed text-zinc-600 md:text-[15px]">{step.shortDescription}</p>
+
+        {showGuidance && (
+          <aside className={guidanceAsideClass} aria-label="Step guidance">
+            <div className="flex items-start gap-3">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-600">
+                <InfoCircleIcon className="h-4 w-4" aria-hidden />
+              </span>
+              <div className="min-w-0 space-y-2">
+                <p className="text-xs font-bold uppercase tracking-[0.1em] text-zinc-500">Step guidance</p>
+                <ul className="list-disc space-y-2 pl-4 text-[13px] leading-relaxed text-zinc-700 marker:text-zinc-400">
+                  {STEP_GUIDANCE[currentStep]?.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </aside>
+        )}
 
         <div className="mt-4 space-y-3" aria-live="polite" aria-atomic="true">
           {workflowComplete && (
-            <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900" role="status">
+            <p className={workflowStatusOk} role="status">
               Workflow marked complete. Your draft remains in this browser (localStorage) until you clear site data or we
               add cloud sync.
             </p>
@@ -1362,8 +1497,8 @@ export function HydrogenPlanner() {
                 </div>
               </fieldset>
 
-              <fieldset className="rounded-xl border border-orange-200 bg-orange-50/40 p-4 md:p-5">
-                <legend className="px-1 text-sm font-semibold text-amber-900">Scope, success & constraints</legend>
+              <fieldset className="rounded-xl border border-zinc-200/90 bg-zinc-50/40 p-4 shadow-sm ring-1 ring-zinc-950/[0.02] md:p-5">
+                <legend className={legendClass}>Scope, success & constraints</legend>
 
                 <label className="mt-2 block">
                   <span className={labelClass}>Success criteria (bullets)</span>
@@ -1441,9 +1576,12 @@ export function HydrogenPlanner() {
                     >
                       <option value="production">Production hub</option>
                       <option value="distribution">Distribution / logistics</option>
-                      <option value="offtake">Offtake cluster</option>
+                      <option value="offtake">Offtake cluster (multi-stream demand on the Demand step)</option>
                       <option value="corridor">Transport corridor</option>
                     </select>
+                    <span className="mt-1 block text-[11px] leading-snug text-zinc-500">
+                      “Offtake cluster” unlocks gas / grey H₂ / diesel / mobility inputs on <span className="font-medium">Estimate hydrogen demand</span>.
+                    </span>
                   </label>
                   <label className="block sm:col-span-2">
                     <span className={labelClass}>Target COD / time horizon</span>
@@ -1469,7 +1607,7 @@ export function HydrogenPlanner() {
                       ["capexFunding", "Capex / funding"],
                     ] as const
                   ).map(([key, title]) => (
-                    <div key={key} className="rounded-lg border border-orange-200 bg-white/60 p-3">
+                    <div key={key} className="rounded-lg border border-zinc-200/90 bg-white p-3 shadow-sm">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="text-xs font-semibold uppercase tracking-wide text-amber-900">{title}</p>
                         <select
@@ -1520,7 +1658,7 @@ export function HydrogenPlanner() {
               </fieldset>
 
               {!canContinueFromProblem && (
-                <p className="rounded-lg border border-dashed border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
+                <p className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50/70 px-4 py-3 text-[13px] leading-relaxed text-zinc-700 shadow-sm">
                   To go to Location, add a short statement (20+ characters), choose a primary use case, at least one
                   success criterion, and a geography scope. The footer action below adds constraint-based workplan items
                   and continues.
@@ -1536,14 +1674,14 @@ export function HydrogenPlanner() {
                   {planningProfile.guidance.map((g) => (
                     <div
                       key={g.title}
-                      className={`rounded-xl border px-4 py-3 text-sm ${
+                      className={`rounded-xl border px-4 py-3 text-sm shadow-sm ring-1 ring-zinc-950/[0.02] ${
                         g.tone === "warn"
-                          ? "border-amber-200 bg-amber-50 text-amber-950"
-                          : "border-sky-200 bg-sky-50 text-sky-950"
+                          ? "border-amber-200/90 bg-amber-50/90 text-amber-950"
+                          : "border-zinc-200 bg-zinc-50/80 text-zinc-800"
                       }`}
                     >
-                      <p className="text-xs font-semibold uppercase tracking-wider opacity-80">{g.title}</p>
-                      <p className="mt-1 text-xs opacity-90">{g.body}</p>
+                      <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-zinc-500">{g.title}</p>
+                      <p className="mt-2 text-[13px] leading-relaxed text-zinc-700">{g.body}</p>
                     </div>
                   ))}
                 </div>
@@ -1815,9 +1953,9 @@ export function HydrogenPlanner() {
                     </label>
                   </div>
 
-                  <div className="mt-6 rounded-xl border border-orange-200 bg-orange-50/40 p-4">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-amber-900">Opportunity signals</p>
-                    <p className="mt-2 text-xs text-amber-900/80">Check what is evidenced for this candidate (desk review).</p>
+                  <div className="mt-6 rounded-xl border border-zinc-200/90 bg-zinc-50/50 p-4 shadow-sm ring-1 ring-zinc-950/[0.02]">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-zinc-500">Opportunity signals</p>
+                    <p className="mt-2 text-[13px] leading-relaxed text-zinc-700">Check what is evidenced for this candidate (desk review).</p>
                     <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
                       {(
                         [
@@ -1941,61 +2079,80 @@ export function HydrogenPlanner() {
           )}
 
           {currentStep === 3 && (
-            <div className="grid gap-6 lg:grid-cols-2">
-              <fieldset className="rounded-xl border border-zinc-200 bg-zinc-50/80 p-5">
-                <legend className="px-1 text-sm font-semibold text-zinc-800">Calculator inputs</legend>
+            <div className="grid gap-6 lg:grid-cols-2 lg:gap-8">
+              <fieldset className={fieldsetSurfaceClass}>
+                <legend className={legendClass}>Calculator inputs</legend>
 
-                <p className="mt-2 text-xs text-zinc-600">
-                  Inputs shown here are driven by your Step 00 user type. Results update only when you click{" "}
-                  <span className="font-semibold">Run calculator</span>.
+                <p className="mt-3 max-w-prose text-[13px] leading-relaxed text-zinc-600">
+                  Fields follow <span className="font-medium text-zinc-800">Project type</span> (same as Step 00). Run the
+                  calculator to refresh numbers; nothing auto-recalculates on blur.
                 </p>
+
+                <div className={`${calloutBrandClass} mt-4`}>
+                  <div className="flex flex-wrap items-start justify-between gap-2 gap-y-1">
+                    <p className="text-xs font-bold uppercase tracking-[0.1em] text-zinc-500">Active model</p>
+                    <span className="rounded-md bg-zinc-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-600">
+                      {formatUserTypeLabel(state.demandModel.user_type)}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-[13px] leading-relaxed text-zinc-700">
+                    Multi-stream demand (natural gas, grey hydrogen, diesel mobility, direct mobility hydrogen, optional grid
+                    services) is available for <span className="font-medium text-zinc-900">Offtake cluster</span> only. Other
+                    project types use capacity, logistics, or corridor models.
+                  </p>
+                  <label className="mt-4 block">
+                    <span className={labelClass}>Project type</span>
+                    <select
+                      className={inputClass}
+                      value={state.problem.projectType}
+                      onChange={(e) =>
+                        setState((s) => ({
+                          ...s,
+                          problem: { ...s.problem, projectType: e.target.value as ProblemDefinition["projectType"] },
+                        }))
+                      }
+                    >
+                      <option value="production">Production hub</option>
+                      <option value="distribution">Distribution / logistics</option>
+                      <option value="offtake">Offtake cluster</option>
+                      <option value="corridor">Transport corridor</option>
+                    </select>
+                  </label>
+                </div>
 
                 {state.demandModel.user_type === "offtake_cluster" && (
                   <>
-                    <div className="mt-4 grid gap-4 sm:grid-cols-3">
-                      <label className="block sm:col-span-2">
-                        <span className={labelClass}>Annual natural gas consumption</span>
-                        <input
-                          className={inputClass}
-                          inputMode="decimal"
-                          value={finiteNumberFieldValue(state.demandModel.annual_natural_gas_consumption)}
-                          onChange={(e) =>
-                            setState((s) => ({
-                              ...s,
-                              demandModel: {
-                                ...s.demandModel,
-                                annual_natural_gas_consumption: parseOptionalFloat(e.target.value),
-                              } as DemandModelInput,
-                            }))
-                          }
-                          placeholder="e.g. 120000"
-                        />
-                      </label>
-                      <label className="block">
-                        <span className={labelClass}>Unit</span>
-                        <select
-                          className={inputClass}
-                          value={state.demandModel.annual_natural_gas_consumption_unit ?? "MWh"}
-                          onChange={(e) =>
-                            setState((s) => ({
-                              ...s,
-                              demandModel: {
-                                ...s.demandModel,
-                                annual_natural_gas_consumption_unit: e.target.value as any,
-                              } as DemandModelInput,
-                            }))
-                          }
-                        >
-                          <option value="m3">m³</option>
-                          <option value="kWh">kWh</option>
-                          <option value="MWh">MWh</option>
-                          <option value="GWh">GWh</option>
-                        </select>
-                      </label>
+                    <div className={`${calloutNeutralClass} mt-4`}>
+                      <p className="text-xs font-bold uppercase tracking-[0.1em] text-zinc-500">Model note</p>
+                      <p className="mt-2 text-[12px] leading-relaxed text-zinc-700">
+                        Screening desk only—not bankable offtake or FEED. Replacement goals accept a decimal (0–1) or a percent
+                        (0–100). If you enter both natural gas in Nm³/yr and the optional consumption row, the Nm³/yr value is used
+                        for the gas stream.
+                      </p>
                     </div>
 
-                    <label className="mt-4 block">
-                      <span className={labelClass}>Replacement percentage (0–1)</span>
+                    <div>
+                      <p className={streamSectionTitleClass}>1 · Natural gas → green hydrogen</p>
+                    <label className="mt-2 block">
+                      <span className={labelClass}>Natural gas (Nm³/yr)</span>
+                      <input
+                        className={inputClass}
+                        inputMode="decimal"
+                        value={finiteNumberFieldValue(state.demandModel.natural_gas_usage_nm3_per_year)}
+                        onChange={(e) =>
+                          setState((s) => ({
+                            ...s,
+                            demandModel: {
+                              ...s.demandModel,
+                              natural_gas_usage_nm3_per_year: parseOptionalFloat(e.target.value),
+                            } as DemandModelInput,
+                          }))
+                        }
+                        placeholder="e.g. 1 000 000"
+                      />
+                    </label>
+                    <label className="mt-3 block">
+                      <span className={labelClass}>Replacement goal (0–1 or %)</span>
                       <input
                         className={inputClass}
                         inputMode="decimal"
@@ -2009,11 +2166,228 @@ export function HydrogenPlanner() {
                             } as DemandModelInput,
                           }))
                         }
-                        placeholder="e.g. 0.3"
+                        placeholder="e.g. 0.3 or 30"
                       />
                     </label>
 
-                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <p className="mt-4 text-[11px] font-medium text-zinc-500">
+                      Optional: gas consumption by energy unit (used when Nm³/yr above is left empty).
+                    </p>
+                    <div className="mt-2 grid gap-4 sm:grid-cols-3">
+                      <label className="block sm:col-span-2">
+                        <span className={labelClass}>Consumption</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.annual_natural_gas_consumption)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                annual_natural_gas_consumption: parseOptionalFloat(e.target.value),
+                              } as DemandModelInput,
+                            }))
+                          }
+                          placeholder="optional if Nm³/yr set"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className={labelClass}>Unit</span>
+                        <select
+                          className={inputClass}
+                          value={state.demandModel.annual_natural_gas_consumption_unit ?? "MWh"}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                annual_natural_gas_consumption_unit: e.target.value as "m3" | "kWh" | "MWh" | "GWh",
+                              } as DemandModelInput,
+                            }))
+                          }
+                        >
+                          <option value="m3">m³ (Nm³)</option>
+                          <option value="kWh">kWh</option>
+                          <option value="MWh">MWh</option>
+                          <option value="GWh">GWh</option>
+                        </select>
+                      </label>
+                    </div>
+                    </div>
+
+                    <div>
+                      <p className={streamSectionTitleClass}>2 · Grey hydrogen → green hydrogen</p>
+                    <div className="mt-2 grid gap-4 sm:grid-cols-2">
+                      <label className="block">
+                        <span className={labelClass}>Grey H₂ usage (Nm³/yr)</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.grey_h2_usage_nm3_per_year)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                grey_h2_usage_nm3_per_year: parseOptionalFloat(e.target.value),
+                              } as DemandModelInput,
+                            }))
+                          }
+                          placeholder="optional"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className={labelClass}>Replacement goal (0–1 or %)</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.grey_h2_replacement_percentage)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                grey_h2_replacement_percentage: parseOptionalFloat(e.target.value),
+                              } as DemandModelInput,
+                            }))
+                          }
+                          placeholder="defaults to 0.3 if usage set"
+                        />
+                      </label>
+                    </div>
+                    </div>
+
+                    <div>
+                      <p className={streamSectionTitleClass}>3 · Diesel mobility → hydrogen</p>
+                    <div className="mt-2 grid gap-4 sm:grid-cols-2">
+                      <label className="block">
+                        <span className={labelClass}>Diesel usage (L/yr)</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.mobility_diesel_liters_per_year)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                mobility_diesel_liters_per_year: parseOptionalFloat(e.target.value),
+                              } as DemandModelInput,
+                            }))
+                          }
+                          placeholder="optional"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className={labelClass}>Mobility replacement goal (0–1 or %)</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.mobility_replacement_percentage)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                mobility_replacement_percentage: parseOptionalFloat(e.target.value),
+                              } as DemandModelInput,
+                            }))
+                          }
+                          placeholder="defaults to 0.3 if diesel set"
+                        />
+                      </label>
+                    </div>
+                    </div>
+
+                    <div>
+                      <p className={streamSectionTitleClass}>4 · New green hydrogen (mobility)</p>
+                    <label className="mt-2 block">
+                      <span className={labelClass}>Hydrogen demand (t/yr)</span>
+                      <input
+                        className={inputClass}
+                        inputMode="decimal"
+                        value={finiteNumberFieldValue(state.demandModel.new_green_h2_mobility_ton_per_year)}
+                        onChange={(e) =>
+                          setState((s) => ({
+                            ...s,
+                            demandModel: {
+                              ...s.demandModel,
+                              new_green_h2_mobility_ton_per_year: parseOptionalFloat(e.target.value),
+                            } as DemandModelInput,
+                          }))
+                        }
+                        placeholder="optional"
+                      />
+                    </label>
+                    </div>
+
+                    <div>
+                      <p className={streamSectionTitleClass}>5 · Grid balancing (electrolysis)</p>
+                      <p className="mb-2 text-[11px] leading-snug text-zinc-500">
+                        Optional desk add-on. Leave electrical-to-chemical efficiency empty to apply the built-in default.
+                      </p>
+                    <div className="mt-2 grid gap-4 sm:grid-cols-2">
+                      <label className="block sm:col-span-2">
+                        <span className={labelClass}>Electrolysis electricity (MWh per year)</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.grid_balancing_electrolysis_electricity_mwh_per_year)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                grid_balancing_electrolysis_electricity_mwh_per_year: parseOptionalFloat(e.target.value),
+                              } as DemandModelInput,
+                            }))
+                          }
+                          placeholder="optional"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className={labelClass}>Utilisation (0–1)</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.grid_balancing_utilisation_01)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                grid_balancing_utilisation_01: parseOptionalFloat(e.target.value),
+                              } as DemandModelInput,
+                            }))
+                          }
+                          placeholder="default 1"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className={labelClass}>Electrical to chemical efficiency (0–1, optional)</span>
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={finiteNumberFieldValue(state.demandModel.grid_balancing_electrical_to_chemical_efficiency_01)}
+                          onChange={(e) =>
+                            setState((s) => ({
+                              ...s,
+                              demandModel: {
+                                ...s.demandModel,
+                                grid_balancing_electrical_to_chemical_efficiency_01: parseOptionalFloat(e.target.value),
+                              } as DemandModelInput,
+                            }))
+                          }
+                          placeholder="Optional"
+                        />
+                      </label>
+                    </div>
+                    </div>
+
+                    <div>
+                      <p className={streamSectionTitleClass}>Horizon & carbon pricing</p>
+                    <div className="mt-2 grid gap-4 sm:grid-cols-2">
                       <label className="block">
                         <span className={labelClass}>Period start (year)</span>
                         <input
@@ -2077,6 +2451,7 @@ export function HydrogenPlanner() {
                           <option value="All">All</option>
                         </select>
                       </label>
+                    </div>
                     </div>
                   </>
                 )}
@@ -2485,7 +2860,7 @@ export function HydrogenPlanner() {
                           placeholder="0"
                         />
                         <span className="mt-1 block text-[11px] text-zinc-500">
-                          Share lost in transit; cost uses kg moved = delivered ÷ (1 − loss).
+                          Share lost in transit; transport cost is based on the mass you must ship to cover that loss.
                         </span>
                       </label>
                     </div>
@@ -2493,19 +2868,19 @@ export function HydrogenPlanner() {
                 )}
 
                 {demandIssues.length > 0 && (
-                  <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
-                    <p className="font-semibold">Missing / invalid inputs</p>
-                    <ul className="mt-2 list-disc space-y-1 pl-5">
+                  <div className="mt-5 rounded-xl border border-red-200/90 bg-red-50/80 px-4 py-3 text-sm text-red-950 shadow-sm ring-1 ring-red-950/[0.04]">
+                    <p className="text-xs font-bold uppercase tracking-[0.08em] text-red-800/90">Validation</p>
+                    <ul className="mt-2 list-disc space-y-1.5 pl-4 text-[13px] leading-relaxed text-red-950/95 marker:text-red-300">
                       {demandIssues.map((i, idx) => (
                         <li key={idx}>
-                          <span className="font-medium">{i.field}</span>: {i.message}
+                          <span className="font-semibold">{i.field}</span>: {i.message}
                         </li>
                       ))}
                     </ul>
                   </div>
                 )}
 
-                <div className="mt-5 flex flex-wrap items-center gap-2">
+                <div className="mt-6 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-5">
                   <button
                     type="button"
                     onClick={() => {
@@ -2538,7 +2913,7 @@ export function HydrogenPlanner() {
                       const result = computeDemandModel(modelToRun);
                       setState((s) => ({ ...s, demandResults: result }));
                     }}
-                    className="rounded-lg bg-[#f97316] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-orange-600"
+                    className="rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900"
                   >
                     Run calculator
                   </button>
@@ -2548,64 +2923,142 @@ export function HydrogenPlanner() {
                       setDemandIssues([]);
                       setState((s) => ({ ...s, demandResults: null }));
                     }}
-                    className="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-800 hover:bg-zinc-50"
+                    className="rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-800 shadow-sm transition-colors hover:bg-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-400"
                   >
                     Clear results
                   </button>
                 </div>
               </fieldset>
 
-              <fieldset className="rounded-xl border border-orange-200/90 bg-gradient-to-b from-orange-50/60 via-amber-50/25 to-white p-5 shadow-sm">
-                <legend className="px-1 text-sm font-semibold text-amber-950">Outputs</legend>
+              <fieldset className={fieldsetResultsClass}>
+                <legend className={legendClass}>Outputs</legend>
                 {state.demandResults ? (
-                  <div className="mt-2 space-y-5">
-                    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-orange-200/70 pb-4">
+                  <div className="mt-3 space-y-6">
+                    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-zinc-200/90 pb-4">
                       <div>
-                        <p className="text-xs font-medium uppercase tracking-wider text-orange-800/90">Latest run</p>
-                        <p className="mt-0.5 text-base font-semibold text-zinc-900">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-zinc-500">Latest run</p>
+                        <p className="mt-1 text-base font-semibold text-zinc-900 md:text-lg">
                           {formatUserTypeLabel(state.demandResults.user_type)}
                         </p>
                       </div>
-                      <span className="shrink-0 rounded-full bg-orange-500/15 px-3 py-1 text-xs font-semibold text-orange-950 ring-1 ring-orange-300/40">
-                        Desk calculator
+                      <span className="shrink-0 rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-600">
+                        Screening
                       </span>
                     </div>
 
                     {state.demandResults.user_type === "offtake_cluster" && (
                       <>
+                        <div className={`${calloutNeutralClass} mt-0`}>
+                          <p className="text-[12px] leading-relaxed text-zinc-700">
+                            Tonnes and baselines match the screening export layout used elsewhere in the suite. CO₂ avoidance uses
+                            standard emission factors on the displaced activity.
+                          </p>
+                        </div>
                         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                           <DemandKpiCard
-                            label="Gas consumption"
+                            label="Gas (thermal)"
                             value={`${formatNumber((state.demandResults.summary_metrics as any).natural_gas_volume_MWh, {
                               maximumFractionDigits: 0,
-                            })} MWh`}
-                            hint="Annual volume, converted to MWh"
+                            })} MWh/yr`}
+                            hint={
+                              (state.demandResults.summary_metrics as any).natural_gas_from_nm3_path
+                                ? "Based on your annual Nm³ input"
+                                : "Based on your energy or volume row for gas"
+                            }
                             emphasis="lead"
                           />
                           <DemandKpiCard
-                            label="Replaceable gas"
+                            label="Replaceable gas (thermal)"
                             value={`${formatNumber((state.demandResults.summary_metrics as any).replaceable_volume_MWh, {
                               maximumFractionDigits: 0,
-                            })} MWh`}
-                            hint="After replacement %"
+                            })} MWh/yr`}
+                            hint="After your natural gas replacement goal"
                           />
                           <DemandKpiCard
-                            label="Avoided CO₂"
+                            label="Avoided CO₂ (total)"
                             value={`${formatNumber((state.demandResults.summary_metrics as any).avoided_co2_ton, {
                               maximumFractionDigits: 1,
                             })} t/yr`}
+                            hint="Combined displacement from gas, grey hydrogen, and diesel"
                           />
                           <DemandKpiCard
-                            label="H₂ substitution"
-                            value={`${formatNumber((state.demandResults.summary_metrics as any).hydrogen_ton_per_year, {
-                              maximumFractionDigits: 1,
+                            label="Total green H₂ required"
+                            value={`${formatNumber((state.demandResults.summary_metrics as any).required_h2_ton_per_year, {
+                              maximumFractionDigits: 2,
                             })} t/yr`}
-                            hint="Desk link from replaceable MWh"
+                            hint="Roll-up across streams; used when you link revenue in Step 4"
                           />
                         </div>
 
                         <div>
-                          <p className="mb-2 text-xs font-semibold text-zinc-700">Year × CO₂ price scenario</p>
+                          <p className="mb-2 text-xs font-semibold text-zinc-700">Baselines (activity before replacement)</p>
+                          <div className="grid gap-2 sm:grid-cols-3">
+                            <DemandKpiCard
+                              label="Baseline natural gas"
+                              value={`${formatNumber((state.demandResults.summary_metrics as any).baseline_natural_gas_nm3_per_year, {
+                                maximumFractionDigits: 0,
+                              })} Nm³/yr`}
+                            />
+                            <DemandKpiCard
+                              label="Baseline grey hydrogen"
+                              value={`${formatNumber((state.demandResults.summary_metrics as any).baseline_grey_h2_nm3_per_year, {
+                                maximumFractionDigits: 0,
+                              })} Nm³/yr`}
+                            />
+                            <DemandKpiCard
+                              label="Baseline diesel"
+                              value={`${formatNumber((state.demandResults.summary_metrics as any).baseline_diesel_l_per_year, {
+                                maximumFractionDigits: 0,
+                              })} L/yr`}
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <p className="mb-2 text-xs font-semibold text-zinc-700">Green H₂ by stream (t/yr)</p>
+                          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                            <DemandKpiCard
+                              label="From natural gas"
+                              value={`${formatNumber((state.demandResults.summary_metrics as any).required_h2_ton_per_year_from_natural_gas, {
+                                maximumFractionDigits: 3,
+                              })} t/yr`}
+                            />
+                            <DemandKpiCard
+                              label="From grey hydrogen"
+                              value={`${formatNumber((state.demandResults.summary_metrics as any).required_h2_ton_per_year_from_grey_h2, {
+                                maximumFractionDigits: 3,
+                              })} t/yr`}
+                            />
+                            <DemandKpiCard
+                              label="From diesel mobility"
+                              value={`${formatNumber((state.demandResults.summary_metrics as any).required_h2_ton_per_year_from_mobility_diesel, {
+                                maximumFractionDigits: 3,
+                              })} t/yr`}
+                              hint="Uses your diesel and fuel-cell efficiency inputs"
+                            />
+                            <DemandKpiCard
+                              label="From new mobility hydrogen"
+                              value={`${formatNumber((state.demandResults.summary_metrics as any).required_h2_ton_per_year_from_new_green_h2_mobility, {
+                                maximumFractionDigits: 3,
+                              })} t/yr`}
+                            />
+                            <DemandKpiCard
+                              label="From grid balancing (desk)"
+                              value={`${formatNumber((state.demandResults.summary_metrics as any).required_h2_ton_per_year_from_grid_balancing, {
+                                maximumFractionDigits: 3,
+                              })} t/yr`}
+                            />
+                            <DemandKpiCard
+                              label="Total (kg/yr)"
+                              value={`${formatNumber((state.demandResults.summary_metrics as any).total_hydrogen_demand_kg, {
+                                maximumFractionDigits: 0,
+                              })} kg/yr`}
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <p className="mb-2 text-xs font-semibold text-zinc-700">Yearly view with CO₂ price scenarios</p>
                           <div className="overflow-hidden rounded-xl border border-zinc-200/90 bg-white shadow-sm">
                             <div className="max-h-[min(420px,55vh)] overflow-auto">
                               <table className="min-w-[600px] w-full text-left text-sm">
@@ -2634,7 +3087,7 @@ export function HydrogenPlanner() {
                                     return (
                                       <tr
                                         key={idx}
-                                        className="bg-white transition-colors hover:bg-orange-50/40 even:bg-zinc-50/50"
+                                        className="bg-white transition-colors hover:bg-zinc-50/80 even:bg-zinc-50/40"
                                       >
                                         <td className="whitespace-nowrap px-4 py-2.5 font-medium tabular-nums text-zinc-900">
                                           {row.year as any}
@@ -2713,7 +3166,7 @@ export function HydrogenPlanner() {
                         <DemandKpiCard
                           label="Transport cost"
                           value={formatCurrencyEUR((state.demandResults.summary_metrics as any).transport_cost)}
-                          hint="kg × km × €/km/kg"
+                          hint="Distance, mass, and your € per km per kg"
                         />
                       </div>
                     )}
@@ -2735,21 +3188,21 @@ export function HydrogenPlanner() {
                           value={`${formatNumber((state.demandResults.summary_metrics as any).transport_basis_kg, {
                             maximumFractionDigits: 0,
                           })} kg`}
-                          hint="Delivered ÷ (1 − loss)"
+                          hint="Higher than delivered when a loss factor applies"
                         />
                         <DemandKpiCard
                           label="Network transport cost"
                           value={formatCurrencyEUR((state.demandResults.summary_metrics as any).total_network_transport_cost)}
-                          hint="Shipped kg × avg km × €/km/kg"
+                          hint="Shipped mass, average leg, and your € per km per kg"
                         />
                       </div>
                     )}
                   </div>
                 ) : (
-                  <div className="mt-4 flex flex-col items-center justify-center rounded-xl border border-dashed border-orange-300/70 bg-orange-50/25 py-14 px-6 text-center">
-                    <p className="text-sm font-semibold text-amber-950">No results yet</p>
-                    <p className="mt-2 max-w-sm text-xs leading-relaxed text-amber-900/85">
-                      Fill in the calculator on the left, then click <span className="font-semibold text-amber-950">Run calculator</span>{" "}
+                  <div className="mt-4 flex flex-col items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-zinc-50/60 py-14 px-6 text-center shadow-inner">
+                    <p className="text-sm font-semibold text-zinc-800">No results yet</p>
+                    <p className="mt-2 max-w-sm text-[13px] leading-relaxed text-zinc-600">
+                      Complete the calculator on the left, then choose <span className="font-medium text-zinc-800">Run calculator</span>{" "}
                       to populate this panel.
                     </p>
                   </div>
@@ -2765,14 +3218,14 @@ export function HydrogenPlanner() {
                   {planningProfile.guidance.map((g) => (
                     <div
                       key={g.title}
-                      className={`rounded-xl border px-4 py-3 text-sm ${
+                      className={`rounded-xl border px-4 py-3 text-sm shadow-sm ring-1 ring-zinc-950/[0.02] ${
                         g.tone === "warn"
-                          ? "border-amber-200 bg-amber-50 text-amber-950"
-                          : "border-sky-200 bg-sky-50 text-sky-950"
+                          ? "border-amber-200/90 bg-amber-50/90 text-amber-950"
+                          : "border-zinc-200 bg-zinc-50/80 text-zinc-800"
                       }`}
                     >
-                      <p className="text-xs font-semibold uppercase tracking-wider opacity-80">{g.title}</p>
-                      <p className="mt-1 text-xs opacity-90">{g.body}</p>
+                      <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-zinc-500">{g.title}</p>
+                      <p className="mt-2 text-[13px] leading-relaxed text-zinc-700">{g.body}</p>
                     </div>
                   ))}
                 </div>
@@ -2797,17 +3250,17 @@ export function HydrogenPlanner() {
                     />
                     <span className="leading-snug">
                       <span className="font-semibold text-zinc-900">Link revenue</span>{" "}
-                      <span className="text-zinc-600">from Step 3 results (kg/yr × price)</span>
+                      <span className="text-zinc-600">from Step 3 hydrogen mass and the price below</span>
                     </span>
                   </label>
 
                   {state.businessCase.revenue_linked_to_step3 && (
-                    <div className="mt-3 rounded-xl border border-orange-200 bg-orange-50/50 px-4 py-3 text-xs text-amber-950">
+                    <div className={`${calloutNeutralClass} mt-3 text-[13px]`}>
                       {(() => {
                         const kg = getHydrogenKgPerYearFromDemandResults(state.demandResults);
                         if (!kg) {
                           return (
-                            <p className="leading-relaxed">
+                            <p className="leading-relaxed text-zinc-800">
                               No Step 3 results to link yet. Run the Step 3 calculator first, or uncheck linking to enter revenue manually.
                             </p>
                           );
@@ -2883,7 +3336,7 @@ export function HydrogenPlanner() {
                       />
                       {state.businessCase.revenue_linked_to_step3 && (
                         <span className="mt-1 block text-[11px] text-zinc-500">
-                          Revenue is derived from hydrogen kg/yr × price (set below).
+                          Revenue follows annual hydrogen sold at the price you set below.
                         </span>
                       )}
                     </label>
@@ -2922,8 +3375,8 @@ export function HydrogenPlanner() {
                   </div>
                 </fieldset>
 
-                <fieldset className="rounded-xl border border-orange-200/90 bg-gradient-to-b from-orange-50/60 via-amber-50/25 to-white p-5 shadow-sm">
-                  <legend className="px-1 text-sm font-semibold text-amber-950">Business case outputs</legend>
+                <fieldset className={fieldsetResultsClass}>
+                  <legend className={legendClass}>Business case outputs</legend>
                   {(() => {
                     const bc = state.businessCase;
                     const years = Math.max(0, Math.floor(bc.project_years || 0));
@@ -2952,7 +3405,7 @@ export function HydrogenPlanner() {
                           <DemandKpiCard
                             label="Annual net cashflow"
                             value={formatCurrencyEUR(annualNet)}
-                            hint={bc.revenue_linked_to_step3 ? "Linked revenue − opex" : "Revenue − opex"}
+                            hint={bc.revenue_linked_to_step3 ? "Linked revenue minus opex" : "Revenue minus opex"}
                             emphasis="lead"
                           />
                           <DemandKpiCard label="NPV" value={formatCurrencyEUR(npvValue)} hint="Discounted at the rate above" />
@@ -2972,21 +3425,28 @@ export function HydrogenPlanner() {
                           <div className="rounded-xl border border-zinc-200/85 bg-white p-4 text-xs text-zinc-600">
                             <p className="font-semibold text-zinc-800">Cashflow definition</p>
                             <p className="mt-2 leading-relaxed">
-                              Year 0 = <span className="font-medium text-zinc-900">−capex</span>. Years 1..N ={" "}
-                              <span className="font-medium text-zinc-900">revenue − opex</span>.
+                              Year 0 is the capital outflow. Later years repeat the same net operating cashflow for each project
+                              year.
                             </p>
                             {bc.revenue_linked_to_step3 && (
-                              <p className="mt-2 leading-relaxed">
-                                Linked revenue ={" "}
-                                <span className="font-medium text-zinc-900">
-                                  {formatNumber(linkedKg ?? undefined, { maximumFractionDigits: 0 })} kg/yr
-                                </span>{" "}
-                                ×{" "}
-                                <span className="font-medium text-zinc-900">
-                                  {formatNumber(bc.hydrogen_price_eur_per_kg ?? 0, { maximumFractionDigits: 3 })} €/kg
-                                </span>{" "}
-                                = <span className="font-medium text-zinc-900">{formatCurrencyEUR(derivedRevenue)}</span>
-                              </p>
+                              <dl className="mt-2 space-y-1 leading-relaxed">
+                                <div className="flex flex-wrap gap-x-2 gap-y-0.5">
+                                  <dt className="text-zinc-500">Hydrogen (Step 3)</dt>
+                                  <dd className="font-medium text-zinc-900">
+                                    {formatNumber(linkedKg ?? undefined, { maximumFractionDigits: 0 })} kg/yr
+                                  </dd>
+                                </div>
+                                <div className="flex flex-wrap gap-x-2 gap-y-0.5">
+                                  <dt className="text-zinc-500">Price</dt>
+                                  <dd className="font-medium text-zinc-900">
+                                    {formatNumber(bc.hydrogen_price_eur_per_kg ?? 0, { maximumFractionDigits: 3 })} €/kg
+                                  </dd>
+                                </div>
+                                <div className="flex flex-wrap gap-x-2 gap-y-0.5">
+                                  <dt className="text-zinc-500">Linked annual revenue</dt>
+                                  <dd className="font-medium text-zinc-900">{formatCurrencyEUR(derivedRevenue)}</dd>
+                                </div>
+                              </dl>
                             )}
                           </div>
                         </div>
@@ -3028,7 +3488,7 @@ export function HydrogenPlanner() {
                     </label>
                   ))}
                 </fieldset>
-                <fieldset className="rounded-xl border border-orange-200 bg-orange-50/40 p-5">
+                <fieldset className={fieldsetSurfaceClass}>
                   <legend className="px-1 text-sm font-semibold text-amber-900">Gate decision</legend>
                   <label className="mt-2 block">
                     <span className={labelClass}>Notes (go / iterate / park)</span>
@@ -3076,7 +3536,7 @@ export function HydrogenPlanner() {
                   ))}
                 </div>
               </fieldset>
-              <fieldset className="rounded-xl border border-orange-200 bg-orange-50/40 p-5">
+              <fieldset className={fieldsetSurfaceClass}>
                 <legend className="px-1 text-sm font-semibold text-amber-900">Schedule</legend>
                 <label className="mt-4 block">
                   <span className={labelClass}>Target completion window</span>
@@ -3127,7 +3587,7 @@ export function HydrogenPlanner() {
                   />
                 </label>
               </fieldset>
-              <fieldset className="rounded-xl border border-orange-200 bg-orange-50/40 p-5">
+              <fieldset className={fieldsetSurfaceClass}>
                 <legend className="px-1 text-sm font-semibold text-amber-900">Logistics</legend>
                 <label className="mt-2 block">
                   <span className={labelClass}>Preferred follow-up</span>
@@ -3143,7 +3603,7 @@ export function HydrogenPlanner() {
                     <option value="workshop">Half-day workshop</option>
                   </select>
                 </label>
-                <div className="mt-6 rounded-lg border border-dashed border-orange-300 bg-white/60 p-4 text-xs text-orange-900">
+                <div className="mt-6 rounded-lg border border-dashed border-zinc-300 bg-zinc-50/50 p-4 text-[13px] leading-relaxed text-zinc-700">
                   Attachments (brief, GIS excerpt, demand sheet) can wire to storage later—note filenames in objectives
                   for now.
                 </div>
@@ -3201,7 +3661,7 @@ export function HydrogenPlanner() {
                   </label>
                 </div>
               </fieldset>
-              <fieldset className="rounded-xl border border-orange-200 bg-orange-50/40 p-5">
+              <fieldset className={fieldsetSurfaceClass}>
                 <legend className="px-1 text-sm font-semibold text-amber-900">Structured feedback</legend>
                 <label className="mt-2 block">
                   <span className={labelClass}>What worked / what to improve</span>
